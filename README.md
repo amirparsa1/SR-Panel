@@ -24,7 +24,7 @@
   
   <p>
     <a href="https://github.com/amirparsa1/SR-Panel">
-      <img src="https://img.shields.io/badge/Version-2.0.1-0052CC?style=for-the-badge&logo=semver&logoColor=white" alt="Version">
+      <img src="https://img.shields.io/badge/Version-2.0.2-0052CC?style=for-the-badge&logo=semver&logoColor=white" alt="Version">
     </a>
     <a href="https://cloudflare.com">
       <img src="https://img.shields.io/badge/Platform-Cloudflare_Workers-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" alt="Platform">

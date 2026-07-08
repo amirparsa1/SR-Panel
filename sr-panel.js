@@ -19,29 +19,58 @@ const DOWNSTREAM_GRAIN_SILENT_MS = 1;
 const TCP_CONCURRENCY = 2;
 const PRELOAD_RACE_DIAL = true;
 export default {
+	async function handleNotification(request, env) {
+	const defaultNotification = {
+		active: true,
+		message: "🚀 به SR Panel خوش آمدید! پنل مدیریت رایگان شما",
+		color: "purple",
+		link: "https://github.com/amirparsa1/SR-Panel",
+		link_text: "مشاهده گیت‌هاب",
+		date: new Date().toISOString().split('T')[0],
+		version: CURRENT_VERSION
+	};
+
+	try {
+		const githubRes = await fetch("https://raw.githubusercontent.com/amirparsa1/SR-Panel/refs/heads/main/notification.json?t=" + Date.now());
+		if (githubRes.ok) {
+			const data = await githubRes.json();
+			return new Response(JSON.stringify(data), {
+				headers: { "Content-Type": "application/json; charset=utf-8" }
+			});
+		}
+	} catch (e) { }
+
+	return new Response(JSON.stringify(defaultNotification), {
+		headers: { "Content-Type": "application/json; charset=utf-8" }
+	});
+	}
+
 	async fetch(request, env, ctx) {
-		trackRequest(env, ctx);
-		await DbService.ensureSchema(env.DB);
-		const url = new URL(request.url);
-		if (Router.isWebSocketUpgrade(request) && url.pathname === "/In_Panel_Rayeghan_Ast_Va_Gheyre_Ghabele_Foroosh") {
-			return await Router.handleWebSocket(request, env, ctx);
+	trackRequest(env, ctx);
+	await DbService.ensureSchema(env.DB);
+	const url = new URL(request.url);
+	if (Router.isWebSocketUpgrade(request) && url.pathname === "/In_Panel_Rayeghan_Ast_Va_Gheyre_Ghabele_Foroosh") {
+		return await Router.handleWebSocket(request, env, ctx);
+	}
+	if (Router.isSubscriptionPath(url.pathname)) {
+		return await Router.handleSubscription(url, env);
+	}
+	if (url.pathname.startsWith("/api/") || url.pathname === "/locations") {
+		return await Router.handleApi(request, url, env, ctx);
+	}
+	if (url.pathname === "/panel" || url.pathname === "/login") {
+		return await Router.handlePanel(request, env);
+	}
+	if (url.pathname.startsWith("/status/")) {
+		return await Router.handleUserStatus(url, env);
+		if (url.pathname === "/notification") {
+			return await handleNotification(request, env);
 		}
-		if (Router.isSubscriptionPath(url.pathname)) {
-			return await Router.handleSubscription(url, env);
-		}
-		if (url.pathname.startsWith("/api/") || url.pathname === "/locations") {
-			return await Router.handleApi(request, url, env, ctx);
-		}
-		if (url.pathname === "/panel" || url.pathname === "/login") {
-			return await Router.handlePanel(request, env);
-		}
-		if (url.pathname.startsWith("/status/")) {
-			return await Router.handleUserStatus(url, env);
-		}
-		return new Response(HTML_TEMPLATES.nginx, {
-			headers: { "Content-Type": "text/html; charset=utf-8" },
-		});
-	},
+	}
+	return new Response(HTML_TEMPLATES.nginx, {
+		headers: { "Content-Type": "text/html; charset=utf-8" },
+	});
+},
 };
 const Router = {
 	isWebSocketUpgrade(request) {
@@ -64,7 +93,7 @@ const Router = {
 				if (socksRow && socksRow.value) {
 					socks5 = socksRow.value;
 				}
-			} catch (e) {}
+			} catch (e) { }
 			const mockStoredData = { proxy_ip: proxyIP, socks5: socks5 };
 			return handleVLESS(env, mockStoredData, ctx, request);
 		} catch (e) {
@@ -526,7 +555,7 @@ const Router = {
 						const geoRes = await fetch(`http://ip-api.com/json/${ip}?fields=countryCode`);
 						const geoData = await geoRes.json();
 						if (geoData && geoData.countryCode) country = geoData.countryCode;
-					} catch (e) {}
+					} catch (e) { }
 				}
 				const startTime = Date.now();
 				const payload = new TextEncoder().encode("GET / HTTP/1.1\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n");
@@ -608,7 +637,7 @@ const Router = {
 				if (request.method === "GET") {
 					try {
 						await flushExpiredTraffic(env);
-					} catch (e) {}
+					} catch (e) { }
 					const { results } = await env.DB.prepare("SELECT * FROM users ORDER BY id DESC").all();
 					const now = Date.now();
 					const enrichedUsers = (results || []).map((user) => ({
@@ -639,7 +668,7 @@ const Router = {
 						}
 						cfReqs.today = dbToday + GLOBAL_REQ_COUNT;
 						cfReqs.total = dbTotal + GLOBAL_REQ_COUNT;
-					} catch (e) {}
+					} catch (e) { }
 					return new Response(
 						JSON.stringify({
 							users: enrichedUsers,
@@ -712,64 +741,64 @@ const DbService = {
       `
 				)
 				.run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN last_active INTEGER").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN fingerprint TEXT DEFAULT 'chrome'").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN max_connections INTEGER").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN limit_req INTEGER").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN used_req INTEGER DEFAULT 0").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN ip_limit INTEGER DEFAULT NULL").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN active_ips TEXT DEFAULT NULL").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("UPDATE users SET ip_limit = max_connections WHERE ip_limit IS NULL AND max_connections IS NOT NULL").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN block_porn INTEGER DEFAULT 0").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN block_ads INTEGER DEFAULT 0").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN frag_len TEXT DEFAULT '200-3000'").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN frag_int TEXT DEFAULT '1-2'").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN lifetime_used_gb REAL DEFAULT 0").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("UPDATE users SET lifetime_used_gb = used_gb WHERE lifetime_used_gb = 0 OR lifetime_used_gb IS NULL").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN user_proxy_ip TEXT DEFAULT NULL").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN user_proxy_iata TEXT DEFAULT NULL").run();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			await db.prepare("ALTER TABLE users ADD COLUMN user_socks5 TEXT DEFAULT NULL").run();
-		} catch (e) {}
+		} catch (e) { }
 		schemaEnsured = true;
 	},
 	async getPanelPassword(db) {
@@ -1071,7 +1100,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 							let activeIps = {};
 							try {
 								activeIps = JSON.parse(user.active_ips || "{}");
-							} catch (e) {}
+							} catch (e) { }
 							const nowTime = Date.now();
 							let hasChanges = false;
 							for (const [ip, data] of Object.entries(activeIps)) {
@@ -1124,7 +1153,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 						}
 					}
 				}
-			} catch (e) {}
+			} catch (e) { }
 		} else {
 			clearInterval(heartbeat);
 		}
@@ -1145,7 +1174,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 		if (activeRemoteWriter) {
 			try {
 				activeRemoteWriter.releaseLock();
-			} catch (e) {}
+			} catch (e) { }
 			activeRemoteWriter = null;
 		}
 		currentSocketWriter = null;
@@ -1171,7 +1200,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 		closeConnection: () => {
 			try {
 				remoteConnWrapper.socket?.close();
-			} catch (e) {}
+			} catch (e) { }
 			closeSocketQuietly(serverSock);
 		},
 		name: "VlessWSQueue",
@@ -1200,7 +1229,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 			let user = null;
 			try {
 				user = await env.DB.prepare("SELECT * FROM users WHERE uuid = ?").bind(reqUUID).first();
-			} catch (e) {}
+			} catch (e) { }
 			if (isOfflineSet || serverSock.readyState !== WebSocket.OPEN) {
 				return;
 			}
@@ -1222,7 +1251,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 				if (new Date() > expiryDate) {
 					try {
 						await env.DB.prepare("UPDATE users SET is_active = 0, last_active = 0 WHERE uuid = ?").bind(reqUUID).run();
-					} catch (e) {}
+					} catch (e) { }
 					serverSock.close();
 					return;
 				}
@@ -1243,7 +1272,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 				let activeIps = {};
 				try {
 					activeIps = JSON.parse(user.active_ips || "{}");
-				} catch (e) {}
+				} catch (e) { }
 				const now = Date.now();
 				for (const [ip, data] of Object.entries(activeIps)) {
 					const lastSeen = data && typeof data === "object" ? data.timestamp : data;
@@ -1293,7 +1322,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 						const now = Date.now();
 						GLOBAL_LAST_ACTIVE_WRITE.set(username, now);
 						await env.DB.prepare("UPDATE users SET last_active = ? WHERE username = ?").bind(now, username).run();
-					} catch (e) {}
+					} catch (e) { }
 				};
 				if (ctx) ctx.waitUntil(setOnlineTask());
 				else setOnlineTask();
@@ -1321,7 +1350,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 				}
 				const rawData = chunkBuffer.slice(offset);
 				const respHeader = new Uint8Array([chunkBuffer[0], 0]);
-				
+
 				if ((user.block_ads === 1 || user.block_porn === 1) && addrType === 2 && port !== 53) {
 					try {
 						const dnsCheck = await dohQuery(addr, "A", targetDoh);
@@ -1330,7 +1359,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 							serverSock.close();
 							return;
 						}
-					} catch (e) {}
+					} catch (e) { }
 				}
 
 				if (cmd === 2) {
@@ -1342,7 +1371,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 					}
 					return;
 				}
-				
+
 				if (cmd === 2) {
 					if (port === 53) {
 						isDnsQuery = true;
@@ -1413,7 +1442,7 @@ async function handleVLESS(env, storedData = null, ctx = null, request = null) {
 							}
 						}
 						remoteConnWrapper.socket = s;
-						s.closed.catch(() => {}).finally(() => closeSocketQuietly(serverSock));
+						s.closed.catch(() => { }).finally(() => closeSocketQuietly(serverSock));
 						connectStreams(s, serverSock, respHeader, null, (b) => {
 							addBytes(b);
 						});
@@ -1557,7 +1586,7 @@ function closeSocketQuietly(socket) {
 		if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CLOSING) {
 			socket.close();
 		}
-	} catch (e) {}
+	} catch (e) { }
 }
 async function dohQuery(domain, recordType, targetDoh = DOH_RESOLVER) {
 	const cacheKey = `${domain}:${recordType}:${targetDoh}`;
@@ -1752,7 +1781,7 @@ function createUpstreamQueue({ getWriter, releaseWriter, retryConnect, closeConn
 		draining = true;
 		try {
 			let batchCount = 0;
-			for (;;) {
+			for (; ;) {
 				if (closed) break;
 				const item = bundle();
 				if (!item) break;
@@ -1789,7 +1818,7 @@ function createUpstreamQueue({ getWriter, releaseWriter, retryConnect, closeConn
 			clear(err);
 			try {
 				closeConnection?.(err);
-			} catch (_) {}
+			} catch (_) { }
 		} finally {
 			draining = false;
 			if (!closed && head < chunks.length) setTimeout(drain, 0);
@@ -1809,7 +1838,7 @@ function createUpstreamQueue({ getWriter, releaseWriter, retryConnect, closeConn
 			clear(err);
 			try {
 				closeConnection?.(err);
-			} catch (_) {}
+			} catch (_) { }
 			throw err;
 		}
 		let completionPromise = null;
@@ -1944,7 +1973,7 @@ function createDownstreamSender(webSocket, headerData = null) {
 async function waitForBackpressure(ws) {
 	if (typeof ws.bufferedAmount === "number") {
 		let maxAttempts = 150;
-		while (ws.bufferedAmount > 1024 * 1024 && maxAttempts > 0) { 
+		while (ws.bufferedAmount > 1024 * 1024 && maxAttempts > 0) {
 			if (ws.readyState !== WebSocket.OPEN) break;
 			await new Promise((r) => setTimeout(r, 20));
 			maxAttempts--;
@@ -1998,10 +2027,10 @@ async function connectStreams(remoteSocket, webSocket, headerData, retryFunc, on
 	} finally {
 		try {
 			reader.cancel();
-		} catch (e) {}
+		} catch (e) { }
 		try {
 			reader.releaseLock();
-		} catch (e) {}
+		} catch (e) { }
 	}
 	if (!hasData && retryFunc) await retryFunc();
 }
@@ -2062,10 +2091,10 @@ async function connectDirect(address, port, initialData = null, targetDoh = "htt
 						if (socket !== winner.socket) {
 							try {
 								socket.close();
-							} catch (e) {}
+							} catch (e) { }
 						}
 					})
-					.catch(() => {});
+					.catch(() => { });
 			}
 		}
 	}
@@ -2096,7 +2125,7 @@ async function forwardVlessUDP(udpChunk, webSocket, respHeader, onBytes, dnsServ
 				},
 			})
 		);
-	} catch (e) {}
+	} catch (e) { }
 }
 function extractUUIDFromVless(data) {
 	if (data.byteLength < 17) return null;
@@ -2121,7 +2150,7 @@ function trackRequest(env, ctx) {
 				} else {
 					await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('req_today', ?) ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + ?").bind(String(countToSave), String(countToSave)).run();
 				}
-			} catch (e) {}
+			} catch (e) { }
 		};
 		if (ctx) ctx.waitUntil(task());
 		else task();
@@ -2249,13 +2278,13 @@ async function connectSocks5(socksStr, destAddr, destPort, initialData) {
 	} catch (e) {
 		try {
 			writer.releaseLock();
-		} catch (err) {}
+		} catch (err) { }
 		try {
 			reader.releaseLock();
-		} catch (err) {}
+		} catch (err) { }
 		try {
 			socket.close();
-		} catch (err) {}
+		} catch (err) { }
 		throw e;
 	}
 }
@@ -2335,13 +2364,13 @@ async function connectHttp(proxyStr, destAddr, destPort, initialData) {
 	} catch (e) {
 		try {
 			writer.releaseLock();
-		} catch (err) {}
+		} catch (err) { }
 		try {
 			reader.releaseLock();
-		} catch (err) {}
+		} catch (err) { }
 		try {
 			socket.close();
-		} catch (err) {}
+		} catch (err) { }
 		throw e;
 	}
 }
@@ -2709,7 +2738,7 @@ const HTML_TEMPLATES = {
             <div class="flex flex-row flex-wrap justify-center items-center gap-3 w-full md:w-auto">
                 <h1 class="text-lg font-bold flex items-center gap-2" dir="ltr">
                     SR Panel 
-                    <span id="panel-version" class="text-xs px-2 py-0.5 font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 rounded-full">v2.0.1</span>
+                    <span id="panel-version" class="text-xs px-2 py-0.5 font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 rounded-full">v2.0.2</span>
                 </h1>
                 <div class="flex items-center gap-3 bg-gray-100 dark:bg-zinc-800/60 px-3 py-1.5 rounded-full border border-gray-200 dark:border-zinc-800/80 shadow-sm flex-shrink-0 w-fit">
                     <a href="https://github.com/amirparsa1/SR-Panel" target="_blank" rel="noopener noreferrer" class="text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 transition-all transform hover:scale-125 duration-200 flex-shrink-0" title="GitHub">
@@ -5371,7 +5400,7 @@ window.filterLocations = function() {
                 window.location.reload();
             }
         }
-const CURRENT_VERSION = '2.0.1';
+const CURRENT_VERSION = '2.0.2';
 const UPDATE_FIX = "constsCURRENT_VERSION='d.d.d'";
 		async function checkForUpdates(isManual = false) {
             try {
