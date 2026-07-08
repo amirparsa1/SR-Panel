@@ -6192,38 +6192,38 @@ window.addEventListener('click', (e) => {
 		}
 
 		function showNotification(data) {
-    const today = new Date().toISOString().split('T')[0];
-    const key = 'sr_notification_' + today;
-    if (localStorage.getItem(key) === 'true') return;
+		    const today = new Date().toISOString().split('T')[0];
+		    const key = 'sr_notification_' + today;
+		    if (localStorage.getItem(key) === 'true') return;
 
-    const banner = document.createElement('div');
-    banner.className = 'fixed top-0 left-0 right-0 z-[999] p-3 text-center text-sm font-bold animate-[slideDown_0.5s_ease] shadow-lg';
-    banner.style.background = 'linear-gradient(135deg, #7c3aed, #3b82f6)';
-    banner.style.color = '#fff';
-    banner.style.borderBottom = '2px solid rgba(255,255,255,0.2)';
-    banner.innerHTML = data.message;
+		    const banner = document.createElement('div');
+		    banner.className = 'fixed top-0 left-0 right-0 z-[999] p-3 text-center text-sm font-bold animate-[slideDown_0.5s_ease] shadow-lg';
+		    banner.style.background = 'linear-gradient(135deg, #7c3aed, #3b82f6)';
+		    banner.style.color = '#fff';
+		    banner.style.borderBottom = '2px solid rgba(255,255,255,0.2)';
+		    banner.innerHTML = data.message;
 
-    if (data.link) {
-        const linkEl = document.createElement('a');
-        linkEl.href = data.link;
-        linkEl.target = '_blank';
-        linkEl.className = 'underline hover:opacity-80 transition ml-1 font-bold';
-        linkEl.style.color = '#fff';
-        linkEl.textContent = data.link_text || 'بیشتر';
-        banner.appendChild(linkEl);
-    }
+		    if (data.link) {
+		        const linkEl = document.createElement('a');
+		        linkEl.href = data.link;
+		        linkEl.target = '_blank';
+		        linkEl.className = 'underline hover:opacity-80 transition ml-1 font-bold';
+		        linkEl.style.color = '#fff';
+		        linkEl.textContent = data.link_text || 'بیشتر';
+		        banner.appendChild(linkEl);
+		    }
 
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'mr-4 text-white/70 hover:text-white transition text-lg leading-none';
-    closeBtn.innerText = '✕';
-    closeBtn.onclick = function() {
-        banner.remove();
-        localStorage.setItem(key, 'true');
-    };
-    banner.appendChild(closeBtn);
+		    const closeBtn = document.createElement('button');
+		    closeBtn.className = 'mr-4 text-white/70 hover:text-white transition text-lg leading-none';
+		    closeBtn.innerText = '✕';
+		    closeBtn.onclick = function() {
+		        banner.remove();
+		        localStorage.setItem(key, 'true');
+		    };
+		    banner.appendChild(closeBtn);
 
-    document.body.prepend(banner);
-}
+		    document.body.prepend(banner);
+		}
 
         document.addEventListener('DOMContentLoaded', () => {
             const u = window.statusUser;
