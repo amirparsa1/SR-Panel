@@ -2698,26 +2698,32 @@ const HTML_TEMPLATES = {
         // CHARTS (CSS-only)
         // ============================================
         function renderCharts(users) {
-            const trafficChart = document.getElementById('traffic-chart');
-            const reqChart = document.getElementById('requests-chart');
-            const sorted = [...users].sort((a,b) => (b.used_gb || 0) - (a.used_gb || 0)).slice(0, 8);
-            const maxTraffic = Math.max(...sorted.map(u => u.used_gb || 0), 1);
-            const maxReq = Math.max(...sorted.map(u => u.used_req || 0), 1);
-            
-            trafficChart.innerHTML = sorted.map(u => \`
-                <div class="flex-1 flex flex-col items-center gap-1">
-                    <div class="w-full bg-gradient-to-t from-purple-500 to-blue-500 rounded-t" style="height: \${((u.used_gb || 0) / maxTraffic) * 100}%; min-height:4px;"></div>
-                    <span class="text-[8px] text-gray-500 truncate max-w-full" title="\${u.username}">\${u.username.slice(0,3)}</span>
-                </div>
-            \`).join('');
-            
-            reqChart.innerHTML = sorted.map(u => \`
-                <div class="flex-1 flex flex-col items-center gap-1">
-                    <div class="w-full bg-gradient-to-t from-orange-500 to-red-500 rounded-t" style="height: \${((u.used_req || 0) / maxReq) * 100}%; min-height:4px;"></div>
-                    <span class="text-[8px] text-gray-500 truncate max-w-full" title="\${u.username}">\${u.username.slice(0,3)}</span>
-                </div>
-            \`).join('');
-        }
+		    const trafficChart = document.getElementById('traffic-chart');
+		    const reqChart = document.getElementById('requests-chart');
+		    const sorted = [...users].sort((a,b) => (b.used_gb || 0) - (a.used_gb || 0)).slice(0, 8);
+		    const maxTraffic = Math.max(...sorted.map(u => u.used_gb || 0), 1);
+		    const maxReq = Math.max(...sorted.map(u => u.used_req || 0), 1);
+		
+		    trafficChart.innerHTML = sorted.map(u => {
+		        const heightPercent = ((u.used_gb || 0) / maxTraffic) * 100;
+		        return `
+		            <div class="flex-1 flex flex-col items-center gap-1">
+		                <div class="w-full bg-gradient-to-t from-purple-500 to-blue-500 rounded-t" style="height: ${heightPercent}%; min-height: 4px;"></div>
+		                <span class="text-[8px] text-gray-500 truncate max-w-full" title="${u.username}">${u.username.slice(0,3)}</span>
+		            </div>
+		        `;
+		    }).join('');
+		
+		    reqChart.innerHTML = sorted.map(u => {
+		        const heightPercent = ((u.used_req || 0) / maxReq) * 100;
+		        return `
+		            <div class="flex-1 flex flex-col items-center gap-1">
+		                <div class="w-full bg-gradient-to-t from-orange-500 to-red-500 rounded-t" style="height: ${heightPercent}%; min-height: 4px;"></div>
+		                <span class="text-[8px] text-gray-500 truncate max-w-full" title="${u.username}">${u.username.slice(0,3)}</span>
+		            </div>
+		        `;		
+		    }).join('');
+		}
 
         // ============================================
         // AT-RISK USERS
