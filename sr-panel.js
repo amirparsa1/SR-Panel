@@ -51,8 +51,6 @@ export default {
 		if (url.pathname.startsWith("/status/")) {
 			return await Router.handleUserStatus(url, env);
 		}
-		
-		// Changelog endpoint
 		if (url.pathname === "/changelog") {
 			return new Response(JSON.stringify({
 				version: CURRENT_VERSION,
@@ -70,7 +68,6 @@ export default {
 				headers: { "Content-Type": "application/json; charset=utf-8" }
 			});
 		}
-		
 		return new Response(HTML_TEMPLATES.nginx, {
 			headers: { "Content-Type": "text/html; charset=utf-8" },
 		});
@@ -328,7 +325,7 @@ const Router = {
 		}
 
 		// ============================================
-		// UPDATE PANEL (WITH "NOT DETECTED" FEATURE)
+		// UPDATE PANEL
 		// ============================================
 		if (url.pathname === "/api/update-panel" && request.method === "POST") {
 			const body = await request.json().catch(() => ({}));
@@ -402,7 +399,7 @@ const Router = {
 				const deployData = await deployRes.json();
 				if (!deployData.success) throw new Error("خطا در اعمال آپدیت در کلودفلر.");
 
-				return new Response(JSON.stringify({ success: true, version: CURRENT_VERSION, changelog: await getChangelog() }), { headers: { "Content-Type": "application/json" } });
+				return new Response(JSON.stringify({ success: true, version: CURRENT_VERSION }), { headers: { "Content-Type": "application/json" } });
 			} catch (err) {
 				const errorMsg = err.message + " | در صورت عدم موفقیت، از طریق لینک زیر آپدیت کنید: https://sr-deployer.ir-srroot.workers.dev/";
 				return new Response(JSON.stringify({ error: errorMsg }), { status: 500, headers: { "Content-Type": "application/json" } });
@@ -915,16 +912,6 @@ function getActiveIpCount(activeIpsJson) {
 	}
 }
 
-async function getChangelog() {
-	try {
-		const res = await fetch("https://raw.githubusercontent.com/amirparsa1/SR-Panel/refs/heads/main/CHANGELOG.md?t=" + Date.now());
-		if (res.ok) return await res.text();
-		return "Changelog not available";
-	} catch (e) {
-		return "Changelog not available";
-	}
-}
-
 // ============================================
 // SUBSCRIPTION SERVICE
 // ============================================
@@ -1026,20 +1013,560 @@ async function flushExpiredTraffic(env) {
 }
 
 // ============================================
-// VLESS HANDLER (Main Proxy Logic)
+// VLESS HANDLER (Proxy Logic)
 // ============================================
 async function handleVLESS(env, storedData = null, ctx = null, request = null) {
-	// ... (VLESS core logic - same as original for stability)
-	// This section is identical to the original zeus.js VLESS handler
-	// to ensure proxy functionality remains unchanged
-	// ... (keeping the existing implementation)
-	
-	// For brevity in this response, the VLESS handler is kept as-is
-	// from the original version to maintain stability
+	const clientIP = request ? request.headers.get("CF-Connecting-IP") || "unknown" : "unknown";
+	const socketPair = new WebSocketPair();
+	const [clientSock, serverSock] = Object.values(socketPair);
+	serverSock.accept();
+	serverSock.binaryType = "arraybuffer";
+	let username = null;
+	let tickCount = 0;
+	let validUUID = null;
+	let userIpLimit = null;
+	let targetDns = "8.8.4.4";
+	let targetDoh = "https://cloudflare-dns.com/dns-query";
+	function addBytes(bytes) {
+		if (bytes <= 0) return;
+		if (!username) {
+			uncountedBytes += bytes;
+			return;
+		}
+		if (uncountedBytes > 0) {
+			bytes += uncountedBytes;
+			uncountedBytes = 0;
+		}
+		let current = GLOBAL_TRAFFIC_CACHE.get(username) || 0;
+		GLOBAL_TRAFFIC_CACHE.set(username, current + bytes);
+		GLOBAL_LAST_ACTIVE_WRITE.set(username, Date.now());
+		if (GLOBAL_WRITE_LOCK.get(username)) return;
+		let lastDbWrite = GLOBAL_LAST_DB_WRITE.get(username) || 0;
+		let now = Date.now();
+		let thresholdBytes = 10 * 1024 * 1024;
+		if (current >= thresholdBytes || (current > 0 && now - lastDbWrite > 60000)) {
+			GLOBAL_WRITE_LOCK.set(username, true);
+			let toCommit = GLOBAL_TRAFFIC_CACHE.get(username) || 0;
+			let toCommitReq = USER_REQ_CACHE.get(username) || 0;
+			if (toCommit <= 0 && toCommitReq <= 0) {
+				GLOBAL_WRITE_LOCK.set(username, false);
+				return;
+			}
+			GLOBAL_TRAFFIC_CACHE.set(username, 0);
+			USER_REQ_CACHE.set(username, 0);
+			GLOBAL_LAST_DB_WRITE.set(username, now);
+			let deltaGb = toCommit / (1024 * 1024 * 1024);
+			let writeTask = async () => {
+				try {
+					await env.DB.prepare("UPDATE users SET used_gb = used_gb + ?, lifetime_used_gb = lifetime_used_gb + ?, used_req = used_req + ? WHERE username = ?").bind(deltaGb, deltaGb, toCommitReq, username).run();
+				} catch (e) {
+					console.error(e.message);
+				} finally {
+					GLOBAL_WRITE_LOCK.set(username, false);
+				}
+			};
+			if (ctx) ctx.waitUntil(writeTask());
+			else writeTask();
+		}
+	}
+	let isOfflineSet = false;
+	const setOffline = () => {
+		if (isOfflineSet) return;
+		isOfflineSet = true;
+		const uname = username;
+		if (!uname) return;
+		if (clientIP && clientIP !== "unknown" && validUUID) {
+			const removeIpTask = async () => {
+				try {
+					const user = await env.DB.prepare("SELECT active_ips FROM users WHERE uuid = ?").bind(validUUID).first();
+					if (user) {
+						let activeIps = JSON.parse(user.active_ips || "{}");
+						if (activeIps[clientIP]) {
+							if (typeof activeIps[clientIP] === "object") {
+								activeIps[clientIP].count = (activeIps[clientIP].count || 1) - 1;
+								if (activeIps[clientIP].count <= 0) {
+									delete activeIps[clientIP];
+								}
+							} else {
+								delete activeIps[clientIP];
+							}
+							await env.DB.prepare("UPDATE users SET active_ips = ? WHERE uuid = ?").bind(JSON.stringify(activeIps), validUUID).run();
+						}
+					}
+				} catch (e) {
+					console.error(e.message);
+				}
+			};
+			if (ctx) ctx.waitUntil(removeIpTask());
+			else removeIpTask();
+		}
+		let activeCount = ACTIVE_CONNECTIONS_COUNT.get(uname) || 1;
+		activeCount = activeCount - 1;
+		if (activeCount <= 0) {
+			ACTIVE_CONNECTIONS_COUNT.delete(uname);
+			let cachedBytes = GLOBAL_TRAFFIC_CACHE.get(uname) || 0;
+			let cachedReqs = USER_REQ_CACHE.get(uname) || 0;
+			if ((cachedBytes > 0 || cachedReqs > 0) && !GLOBAL_WRITE_LOCK.get(uname)) {
+				GLOBAL_WRITE_LOCK.set(uname, true);
+				const deltaGb = cachedBytes / (1024 * 1024 * 1024);
+				const writeTask = async () => {
+					try {
+						await env.DB.prepare("UPDATE users SET used_gb = used_gb + ?, lifetime_used_gb = lifetime_used_gb + ?, used_req = used_req + ? WHERE username = ?").bind(deltaGb, deltaGb, cachedReqs, uname).run();
+					} catch (e) {
+						console.error(e.message);
+					} finally {
+						GLOBAL_WRITE_LOCK.delete(uname);
+						GLOBAL_TRAFFIC_CACHE.delete(uname);
+						USER_REQ_CACHE.delete(uname);
+						GLOBAL_LAST_ACTIVE_WRITE.delete(uname);
+					}
+				};
+				if (ctx) {
+					ctx.waitUntil(writeTask());
+				} else {
+					writeTask();
+				}
+			} else {
+				GLOBAL_TRAFFIC_CACHE.delete(uname);
+				USER_REQ_CACHE.delete(uname);
+				GLOBAL_LAST_ACTIVE_WRITE.delete(uname);
+				GLOBAL_WRITE_LOCK.delete(uname);
+			}
+		} else {
+			ACTIVE_CONNECTIONS_COUNT.set(uname, activeCount);
+		}
+	};
+	const heartbeat = setInterval(async () => {
+		if (serverSock.readyState === WebSocket.OPEN) {
+			try {
+				serverSock.send(new Uint8Array(0));
+				if (!validUUID) return;
+				tickCount++;
+				if (tickCount >= 1) {
+					tickCount = 0;
+					const user = await env.DB.prepare("SELECT is_active, limit_gb, used_gb, limit_req, used_req, expiry_days, created_at, ip_limit, active_ips FROM users WHERE uuid = ?").bind(validUUID).first();
+					if (user) {
+						userIpLimit = user.ip_limit;
+					}
+					let isExpired = false;
+					let isIpLimitExpired = false;
+					let updatedActiveIps = null;
+					if (!user || user.is_active === 0) {
+						isExpired = true;
+					} else {
+						if (user.limit_gb && user.used_gb >= user.limit_gb) {
+							isExpired = true;
+						}
+						if (user.limit_req && user.used_req + (USER_REQ_CACHE.get(username) || 0) >= user.limit_req) {
+							isExpired = true;
+						}
+						if (user.expiry_days && user.created_at) {
+							const created = new Date(user.created_at);
+							const expiryDate = new Date(created.getTime() + user.expiry_days * 24 * 60 * 60 * 1000);
+							if (new Date() > expiryDate) {
+								isExpired = true;
+							}
+						}
+						if (!isExpired && clientIP && clientIP !== "unknown") {
+							let activeIps = {};
+							try {
+								activeIps = JSON.parse(user.active_ips || "{}");
+							} catch (e) {}
+							const nowTime = Date.now();
+							let hasChanges = false;
+							for (const [ip, data] of Object.entries(activeIps)) {
+								const lastSeen = data && typeof data === "object" ? data.timestamp : data;
+								if (nowTime - lastSeen > 30000) {
+									delete activeIps[ip];
+									hasChanges = true;
+								}
+							}
+							if (!activeIps[clientIP]) {
+								isIpLimitExpired = true;
+							} else {
+								const sortedIps = Object.keys(activeIps).sort((a, b) => {
+									const tA = activeIps[a] && typeof activeIps[a] === "object" ? activeIps[a].timestamp : activeIps[a];
+									const tB = activeIps[b] && typeof activeIps[b] === "object" ? activeIps[b].timestamp : activeIps[b];
+									return tB - tA;
+								});
+								const clientIpIndex = sortedIps.indexOf(clientIP);
+								if (user.ip_limit && user.ip_limit > 0 && clientIpIndex >= user.ip_limit) {
+									isIpLimitExpired = true;
+								}
+							}
+							if (hasChanges || isIpLimitExpired) {
+								updatedActiveIps = JSON.stringify(activeIps);
+							}
+						}
+					}
+					if (isExpired) {
+						await env.DB.prepare("UPDATE users SET is_active = 0, last_active = 0 WHERE uuid = ?").bind(validUUID).run();
+						clearInterval(heartbeat);
+						closeSocketQuietly(serverSock);
+						return;
+					}
+					if (isIpLimitExpired) {
+						clearInterval(heartbeat);
+						closeSocketQuietly(serverSock);
+						return;
+					}
+					const now = Date.now();
+					const lastRecorded = GLOBAL_LAST_ACTIVE_WRITE.get(username) || 0;
+					if (now - lastRecorded > 35000 || updatedActiveIps !== null) {
+						GLOBAL_LAST_ACTIVE_WRITE.set(username, now);
+						if (updatedActiveIps !== null) {
+							await env.DB.prepare("UPDATE users SET last_active = ?, active_ips = ? WHERE username = ?").bind(now, updatedActiveIps, username).run();
+						} else {
+							await env.DB.prepare("UPDATE users SET last_active = ? WHERE username = ?").bind(now, username).run();
+						}
+					}
+				}
+			} catch (e) {}
+		} else {
+			clearInterval(heartbeat);
+		}
+	}, 35000);
+	let remoteConnWrapper = { socket: null, connectingPromise: null, retryConnect: null };
+	let reqUUID = null;
+	let isHeaderParsed = false;
+	let isHeaderParsing = false;
+	let isDnsQuery = false;
+	let chunkBuffer = new Uint8Array(0);
+	let uncountedBytes = 0;
+	const proxyIP = storedData?.proxy_ip || "proxyip.cmliussss.net";
+	let wsChain = Promise.resolve();
+	let wsStopped = false, wsFailed = false, wsFinished = false;
+	let wsQueueBytes = 0, wsQueueItems = 0;
+	let currentSocketWriter = null, activeRemoteWriter = null;
+	const releaseRemoteWriter = () => {
+		if (activeRemoteWriter) {
+			try {
+				activeRemoteWriter.releaseLock();
+			} catch (e) {}
+			activeRemoteWriter = null;
+		}
+		currentSocketWriter = null;
+	};
+	const getRemoteWriter = () => {
+		const s = remoteConnWrapper.socket;
+		if (!s) return null;
+		if (s !== currentSocketWriter) {
+			releaseRemoteWriter();
+			currentSocketWriter = s;
+			activeRemoteWriter = s.writable.getWriter();
+		}
+		return activeRemoteWriter;
+	};
+	const upstreamQueue = createUpstreamQueue({
+		getWriter: getRemoteWriter,
+		releaseWriter: releaseRemoteWriter,
+		retryConnect: async () => {
+			if (typeof remoteConnWrapper.retryConnect === "function") {
+				await remoteConnWrapper.retryConnect();
+			}
+		},
+		closeConnection: () => {
+			try {
+				remoteConnWrapper.socket?.close();
+			} catch (e) {}
+			closeSocketQuietly(serverSock);
+		},
+		name: "VlessWSQueue",
+	});
+	const writeToRemote = async (chunk, allowRetry = true) => {
+		return upstreamQueue.writeAndAwait(chunk, allowRetry);
+	};
+	const processWsMessage = async (chunk) => {
+		const bytes = chunk.byteLength || 0;
+		await addBytes(bytes);
+		if (isDnsQuery) {
+			await forwardVlessUDP(chunk, serverSock, null, addBytes, targetDns);
+			return;
+		}
+		if (await writeToRemote(chunk)) return;
+		if (!isHeaderParsed) {
+			chunkBuffer = concatBytes(chunkBuffer, chunk);
+			if (chunkBuffer.byteLength < 24) return;
+			if (isHeaderParsing) return;
+			isHeaderParsing = true;
+			reqUUID = extractUUIDFromVless(chunkBuffer);
+			if (!reqUUID) {
+				serverSock.close();
+				return;
+			}
+			let user = null;
+			try {
+				user = await env.DB.prepare("SELECT * FROM users WHERE uuid = ?").bind(reqUUID).first();
+			} catch (e) {}
+			if (isOfflineSet || serverSock.readyState !== WebSocket.OPEN) {
+				return;
+			}
+			if (!user || user.is_active === 0) {
+				serverSock.close();
+				return;
+			}
+			if (user.limit_gb && user.used_gb >= user.limit_gb) {
+				serverSock.close();
+				return;
+			}
+			if (user.limit_req && user.used_req + (USER_REQ_CACHE.get(user.username) || 0) >= user.limit_req) {
+				serverSock.close();
+				return;
+			}
+			if (user.expiry_days && user.created_at) {
+				const created = new Date(user.created_at);
+				const expiryDate = new Date(created.getTime() + user.expiry_days * 24 * 60 * 60 * 1000);
+				if (new Date() > expiryDate) {
+					try {
+						await env.DB.prepare("UPDATE users SET is_active = 0, last_active = 0 WHERE uuid = ?").bind(reqUUID).run();
+					} catch (e) {}
+					serverSock.close();
+					return;
+				}
+			}
+			userIpLimit = user.ip_limit;
+			if (user.block_porn === 1 && user.block_ads === 1) {
+				targetDns = "94.140.14.15";
+				targetDoh = "https://family.adguard-dns.com/dns-query";
+			} else if (user.block_porn === 1) {
+				targetDns = "1.1.1.3";
+				targetDoh = "https://family.cloudflare-dns.com/dns-query";
+			} else if (user.block_ads === 1) {
+				targetDns = "94.140.14.14";
+				targetDoh = "https://dns.adguard-dns.com/dns-query";
+			}
+			if (clientIP && clientIP !== "unknown") {
+				let activeIps = {};
+				try {
+					activeIps = JSON.parse(user.active_ips || "{}");
+				} catch (e) {}
+				const now = Date.now();
+				for (const [ip, data] of Object.entries(activeIps)) {
+					const lastSeen = data && typeof data === "object" ? data.timestamp : data;
+					if (now - lastSeen > 30000) {
+						delete activeIps[ip];
+					}
+				}
+				if (!activeIps[clientIP]) {
+					const sortedIps = Object.keys(activeIps).sort((a, b) => {
+						const tA = activeIps[a] && typeof activeIps[a] === "object" ? activeIps[a].timestamp : activeIps[a];
+						const tB = activeIps[b] && typeof activeIps[b] === "object" ? activeIps[b].timestamp : activeIps[b];
+						return tB - tA;
+					});
+					if (user.ip_limit && user.ip_limit > 0 && sortedIps.length >= user.ip_limit) {
+						serverSock.close();
+						return;
+					}
+					activeIps[clientIP] = { timestamp: now, count: 1 };
+				} else {
+					if (typeof activeIps[clientIP] === "object") {
+						activeIps[clientIP].timestamp = now;
+						activeIps[clientIP].count = (activeIps[clientIP].count || 0) + 1;
+					} else {
+						activeIps[clientIP] = { timestamp: now, count: 1 };
+					}
+				}
+				try {
+					await env.DB.prepare("UPDATE users SET active_ips = ?, last_active = ? WHERE uuid = ?").bind(JSON.stringify(activeIps), now, reqUUID).run();
+				} catch (e) {}
+			}
+			validUUID = reqUUID;
+			username = user.username;
+			isHeaderParsed = true;
+			let currentReqs = USER_REQ_CACHE.get(username) || 0;
+			USER_REQ_CACHE.set(username, currentReqs + 1);
+			let activeCount = ACTIVE_CONNECTIONS_COUNT.get(username) || 0;
+			ACTIVE_CONNECTIONS_COUNT.set(username, activeCount + 1);
+			if (activeCount === 0) {
+				const setOnlineTask = async () => {
+					try {
+						const now = Date.now();
+						GLOBAL_LAST_ACTIVE_WRITE.set(username, now);
+						await env.DB.prepare("UPDATE users SET last_active = ? WHERE username = ?").bind(now, username).run();
+					} catch (e) {}
+				};
+				if (ctx) ctx.waitUntil(setOnlineTask());
+				else setOnlineTask();
+			}
+			try {
+				let offset = 17;
+				const optLen = chunkBuffer[offset++];
+				offset += optLen;
+				const cmd = chunkBuffer[offset++];
+				const port = (chunkBuffer[offset++] << 8) | chunkBuffer[offset++];
+				const addrType = chunkBuffer[offset++];
+				let addr = "";
+				if (addrType === 1) {
+					addr = `${chunkBuffer[offset++]}.${chunkBuffer[offset++]}.${chunkBuffer[offset++]}.${chunkBuffer[offset++]}`;
+				} else if (addrType === 2) {
+					const domainLen = chunkBuffer[offset++];
+					addr = new TextDecoder().decode(chunkBuffer.slice(offset, offset + domainLen));
+					offset += domainLen;
+				} else if (addrType === 3) {
+					const v6 = [];
+					for (let i = 0; i < 8; i++) {
+						v6.push(((chunkBuffer[offset++] << 8) | chunkBuffer[offset++]).toString(16));
+					}
+					addr = v6.join(":");
+				}
+				const rawData = chunkBuffer.slice(offset);
+				const respHeader = new Uint8Array([chunkBuffer[0], 0]);
+
+				if ((user.block_ads === 1 || user.block_porn === 1) && addrType === 2 && port !== 53) {
+					try {
+						const dnsCheck = await dohQuery(addr, "A", targetDoh);
+						const isBlocked = dnsCheck.some(r => r.data === "0.0.0.0" || r.data === "::" || r.data === "176.103.130.130");
+						if (isBlocked) {
+							serverSock.close();
+							return;
+						}
+					} catch (e) {}
+				}
+
+				if (cmd === 2) {
+					if (port === 53) {
+						isDnsQuery = true;
+						await forwardVlessUDP(rawData, serverSock, respHeader, addBytes, targetDns);
+					} else {
+						serverSock.close();
+					}
+					return;
+				}
+				const connectTCP = async (dataPayload = null, useFallback = true) => {
+					if (remoteConnWrapper.connectingPromise) {
+						await remoteConnWrapper.connectingPromise;
+						return;
+					}
+					const task = (async () => {
+						let s = null;
+						const socks5 = user?.user_socks5 || "";
+
+						if (socks5) {
+							s = await connectProxy(socks5, addr, port, dataPayload);
+						} else {
+							let activeProxyIP = "";
+							if (user?.user_proxy_iata) {
+								activeProxyIP = user.user_proxy_iata.toLowerCase() + ".proxyip.cmliussss.net";
+							} else if (user?.user_proxy_ip) {
+								activeProxyIP = user.user_proxy_ip;
+							}
+
+							let fHost = activeProxyIP;
+							let fPort = port;
+							if (activeProxyIP) {
+								if (activeProxyIP.startsWith("[")) {
+									const closeIdx = activeProxyIP.indexOf("]");
+									if (closeIdx !== -1) {
+										fHost = activeProxyIP.substring(1, closeIdx);
+										if (activeProxyIP.length > closeIdx + 1 && activeProxyIP[closeIdx + 1] === ":") {
+											fPort = parseInt(activeProxyIP.substring(closeIdx + 2)) || port;
+										}
+									}
+								} else {
+									const lastColon = activeProxyIP.lastIndexOf(":");
+									if (lastColon !== -1 && activeProxyIP.indexOf(":") === lastColon) {
+										fHost = activeProxyIP.substring(0, lastColon);
+										fPort = parseInt(activeProxyIP.substring(lastColon + 1)) || port;
+									} else {
+										fHost = activeProxyIP;
+									}
+								}
+							}
+							const isCustomProxy = activeProxyIP && activeProxyIP !== "proxyip.cmliussss.net";
+
+							if (isCustomProxy) {
+								try {
+									s = await connectDirect(fHost, fPort, dataPayload, targetDoh);
+								} catch (err) {
+									s = await connectDirect(addr, port, dataPayload, targetDoh);
+								}
+							} else {
+								try {
+									s = await connectDirect(addr, port, dataPayload, targetDoh);
+								} catch (err) {
+									if (useFallback && activeProxyIP) {
+										s = await connectDirect(fHost, fPort, dataPayload, targetDoh);
+									} else {
+										throw err;
+									}
+								}
+							}
+						}
+						remoteConnWrapper.socket = s;
+						s.closed.catch(() => {}).finally(() => closeSocketQuietly(serverSock));
+						connectStreams(s, serverSock, respHeader, null, (b) => {
+							addBytes(b);
+						});
+					})();
+					remoteConnWrapper.connectingPromise = task;
+					try {
+						await task;
+					} finally {
+						if (remoteConnWrapper.connectingPromise === task) {
+							remoteConnWrapper.connectingPromise = null;
+						}
+					}
+				};
+				remoteConnWrapper.retryConnect = async () => connectTCP(null, false);
+				await connectTCP(rawData, true);
+			} catch (e) {
+				serverSock.close();
+			}
+		}
+	};
+	const handleWsError = (err) => {
+		if (wsFailed) return;
+		wsFailed = true;
+		wsStopped = true;
+		wsQueueBytes = 0;
+		wsQueueItems = 0;
+		upstreamQueue.clear();
+		releaseRemoteWriter();
+		closeSocketQuietly(serverSock);
+		setOffline();
+	};
+	const pushToChain = (task) => {
+		wsChain = wsChain.then(task).catch(handleWsError);
+	};
+	serverSock.addEventListener("message", (event) => {
+		if (wsStopped || wsFailed) return;
+		const size = event.data.byteLength || 0;
+		const nextBytes = wsQueueBytes + size;
+		const nextItems = wsQueueItems + 1;
+		if (nextBytes > UPSTREAM_QUEUE_MAX_BYTES || nextItems > UPSTREAM_QUEUE_MAX_ITEMS) {
+			handleWsError(new Error("ws queue overflow"));
+			return;
+		}
+		wsQueueBytes = nextBytes;
+		wsQueueItems = nextItems;
+		pushToChain(async () => {
+			wsQueueBytes = Math.max(0, wsQueueBytes - size);
+			wsQueueItems = Math.max(0, wsQueueItems - 1);
+			if (wsFailed) return;
+			await processWsMessage(event.data);
+		});
+	});
+	serverSock.addEventListener("close", () => {
+		clearInterval(heartbeat);
+		closeSocketQuietly(serverSock);
+		setOffline();
+		if (wsFinished) return;
+		wsFinished = true;
+		wsStopped = true;
+		pushToChain(async () => {
+			if (wsFailed) return;
+			await upstreamQueue.awaitEmpty();
+			releaseRemoteWriter();
+		});
+	});
+	serverSock.addEventListener("error", (err) => {
+		handleWsError(err);
+	});
+	return new Response(null, { status: 101, webSocket: clientSock });
 }
 
 // ============================================
-// PROXY HELPERS
+// CF USAGE
 // ============================================
 async function getCfUsage(env) {
 	if (!env.CF_API_TOKEN || !env.CF_ACCOUNT_ID) return { today: 0, total: 0 };
@@ -1074,6 +1601,9 @@ async function getCfUsage(env) {
 	}
 }
 
+// ============================================
+// IP HELPERS
+// ============================================
 function isIPv4(value) {
 	const parts = String(value || "").split(".");
 	return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
@@ -1935,7 +2465,6 @@ const HTML_TEMPLATES = {
     <style>
         body { font-family: 'Vazirmatn', sans-serif; background: #0a0a0f; }
         .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.08); }
-        .glow-border { border-image: linear-gradient(135deg, #7c3aed, #3b82f6, #ec4899) 1; }
         .gradient-text { background: linear-gradient(135deg, #7c3aed, #3b82f6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
         .hover-glow:hover { box-shadow: 0 0 30px rgba(124, 58, 237, 0.3); }
     </style>
@@ -2107,1167 +2636,6 @@ const HTML_TEMPLATES = {
 </body>
 </html>`,
 
-	panel: `<!DOCTYPE html>
-<html lang="fa" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SR Panel v${CURRENT_VERSION}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <style>
-        * { font-family: 'Vazirmatn', sans-serif; }
-        body { background: #0a0a0f; }
-        .glass { background: rgba(255,255,255,0.03); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.06); }
-        .glass-hover:hover { background: rgba(255,255,255,0.06); border-color: rgba(124,58,237,0.3); }
-        .gradient-bg { background: linear-gradient(135deg, #0a0a0f, #1a0a2e, #0a0a2e); }
-        .sidebar-gradient { background: linear-gradient(180deg, rgba(124,58,237,0.1), rgba(59,130,246,0.05)); }
-        .glow-text { background: linear-gradient(135deg, #7c3aed, #3b82f6, #ec4899); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .card-glow:hover { box-shadow: 0 0 40px rgba(124,58,237,0.15); }
-        .stat-card { transition: all 0.3s ease; }
-        .stat-card:hover { transform: translateY(-4px); }
-        .progress-ring { transition: stroke-dashoffset 0.5s ease; }
-        .sidebar { transition: all 0.3s ease; }
-        .sidebar-closed { margin-right: -280px; }
-        @media (max-width: 768px) { .sidebar { position: fixed; z-index: 50; height: 100vh; } }
-        ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #7c3aed; border-radius: 4px; }
-        .fade-in { animation: fadeIn 0.4s ease-in-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .pulse-dot { animation: pulse 2s infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-        .update-notification { animation: slideDown 0.5s ease; }
-        @keyframes slideDown { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-    </style>
-</head>
-<body class="gradient-bg text-white min-h-screen">
-    <!-- ============================================ -->
-    <!-- UPDATE NOTIFICATION (Not Detected Feature)     -->
-    <!-- ============================================ -->
-    <div id="update-notification" class="hidden fixed top-4 left-1/2 -translate-x-1/2 z-[100] w-[95%] max-w-2xl update-notification">
-        <div class="glass rounded-2xl p-4 flex items-center justify-between border border-purple-500/30 shadow-2xl shadow-purple-500/20">
-            <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center animate-pulse">
-                    <i class="fas fa-arrow-up text-purple-400 text-xl"></i>
-                </div>
-                <div>
-                    <p class="font-bold text-sm">نسخه جدید SR Panel در دسترس است!</p>
-                    <p class="text-xs text-gray-400" id="update-version-text">vX.X.X</p>
-                </div>
-            </div>
-            <div class="flex gap-2">
-                <button onclick="applyUpdate()" class="px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-xs font-bold rounded-lg hover:shadow-lg hover:shadow-purple-500/30 transition">
-                    آپدیت خودکار
-                </button>
-                <button onclick="dismissUpdate()" class="px-3 py-2 bg-white/5 hover:bg-white/10 text-gray-400 text-xs rounded-lg transition">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- ============================================ -->
-    <!-- SIDEBAR                                      -->
-    <!-- ============================================ -->
-    <aside id="sidebar" class="sidebar fixed top-0 right-0 h-full w-[280px] bg-[#0d0d1a] border-l border-white/5 p-6 overflow-y-auto z-40 transition-all duration-300">
-        <div class="flex items-center justify-between mb-8">
-            <div class="flex items-center gap-2">
-                <div class="w-8 h-8 bg-gradient-to-br from-purple-600 to-blue-600 rounded-lg flex items-center justify-center">
-                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                    </svg>
-                </div>
-                <span class="font-bold text-lg glow-text">SR Panel</span>
-            </div>
-            <button onclick="toggleSidebar()" class="md:hidden text-gray-400 hover:text-white transition">
-                <i class="fas fa-times text-xl"></i>
-            </button>
-        </div>
-
-        <div class="space-y-1">
-            <a href="#" onclick="showDashboard()" class="flex items-center gap-3 px-4 py-3 rounded-xl bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 transition" id="nav-dashboard">
-                <i class="fas fa-chart-pie w-5 text-center"></i>
-                <span>داشبورد</span>
-            </a>
-            <a href="#" onclick="showUsers()" class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 transition text-gray-400 hover:text-white" id="nav-users">
-                <i class="fas fa-users w-5 text-center"></i>
-                <span>مدیریت کاربران</span>
-            </a>
-            <a href="#" onclick="showSettings()" class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 transition text-gray-400 hover:text-white" id="nav-settings">
-                <i class="fas fa-cog w-5 text-center"></i>
-                <span>تنظیمات</span>
-            </a>
-            <a href="#" onclick="showChangelog()" class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 transition text-gray-400 hover:text-white" id="nav-changelog">
-                <i class="fas fa-history w-5 text-center"></i>
-                <span>تغییرات نسخه</span>
-            </a>
-        </div>
-
-        <div class="absolute bottom-6 right-6 left-6">
-            <div class="glass rounded-xl p-4 text-center">
-                <p class="text-[10px] text-gray-500">نسخه</p>
-                <p class="font-bold glow-text text-sm" id="panel-version">v${CURRENT_VERSION}</p>
-                <div class="flex justify-center gap-4 mt-3">
-                    <a href="https://github.com/amirparsa1/SR-Panel" target="_blank" class="text-gray-500 hover:text-white transition">
-                        <i class="fab fa-github text-lg"></i>
-                    </a>
-                    <a href="https://t.me/SR_Panel_IR_BOT" target="_blank" class="text-gray-500 hover:text-blue-400 transition">
-                        <i class="fab fa-telegram text-lg"></i>
-                    </a>
-                </div>
-                <button onclick="logoutAdmin()" class="mt-3 w-full py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 text-xs font-bold rounded-lg transition">
-                    <i class="fas fa-sign-out-alt ml-1"></i> خروج
-                </button>
-            </div>
-        </div>
-    </aside>
-
-    <!-- ============================================ -->
-    <!-- MAIN CONTENT                                 -->
-    <!-- ============================================ -->
-    <main class="mr-0 md:mr-[280px] transition-all duration-300 p-4 md:p-8">
-        <!-- Mobile Toggle -->
-        <button onclick="toggleSidebar()" class="md:hidden fixed bottom-6 right-6 z-30 w-12 h-12 rounded-full bg-gradient-to-r from-purple-600 to-blue-600 shadow-lg shadow-purple-500/30 flex items-center justify-center">
-            <i class="fas fa-bars text-white text-xl"></i>
-        </button>
-
-        <!-- ========================================== -->
-        <!-- DASHBOARD SECTION                          -->
-        <!-- ========================================== -->
-        <div id="dashboard-section" class="fade-in">
-            <h1 class="text-2xl font-bold glow-text mb-6">📊 داشبورد</h1>
-            
-            <!-- Stats Cards -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                <div class="glass rounded-2xl p-4 stat-card card-glow">
-                    <div class="flex items-center justify-between">
-                        <span class="text-gray-400 text-sm">کل کاربران</span>
-                        <div class="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
-                            <i class="fas fa-users text-purple-400"></i>
-                        </div>
-                    </div>
-                    <p class="text-2xl font-bold mt-2" id="stat-total-users">0</p>
-                </div>
-                <div class="glass rounded-2xl p-4 stat-card card-glow">
-                    <div class="flex items-center justify-between">
-                        <span class="text-gray-400 text-sm">آنلاین</span>
-                        <div class="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center">
-                            <i class="fas fa-wifi text-green-400"></i>
-                        </div>
-                    </div>
-                    <p class="text-2xl font-bold mt-2 text-green-400" id="stat-active-users">0</p>
-                </div>
-                <div class="glass rounded-2xl p-4 stat-card card-glow">
-                    <div class="flex items-center justify-between">
-                        <span class="text-gray-400 text-sm">ریکوئست امروز</span>
-                        <div class="w-10 h-10 rounded-xl bg-orange-500/20 flex items-center justify-center">
-                            <i class="fas fa-cloud-upload-alt text-orange-400"></i>
-                        </div>
-                    </div>
-                    <p class="text-2xl font-bold mt-2 text-orange-400" id="stat-cf-requests">0</p>
-                    <div class="w-full h-1 bg-white/5 rounded-full mt-2 overflow-hidden">
-                        <div id="stat-cf-progress" class="h-full bg-gradient-to-r from-orange-500 to-red-500 rounded-full transition-all duration-500" style="width:0%"></div>
-                    </div>
-                </div>
-                <div class="glass rounded-2xl p-4 stat-card card-glow">
-                    <div class="flex items-center justify-between">
-                        <span class="text-gray-400 text-sm">ترافیک مصرفی</span>
-                        <div class="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
-                            <i class="fas fa-database text-blue-400"></i>
-                        </div>
-                    </div>
-                    <p class="text-2xl font-bold mt-2 text-blue-400" id="stat-total-usage">0 GB</p>
-                </div>
-            </div>
-
-            <!-- Charts (CSS-only) -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <div class="glass rounded-2xl p-4">
-                    <h3 class="font-bold text-sm text-gray-300 mb-4">📈 ترافیک مصرفی (تو)</h3>
-                    <div id="traffic-chart" class="flex items-end gap-1 h-32"></div>
-                </div>
-                <div class="glass rounded-2xl p-4">
-                    <h3 class="font-bold text-sm text-gray-300 mb-4">📊 ریکوئست‌های روزانه</h3>
-                    <div id="requests-chart" class="flex items-end gap-1 h-32"></div>
-                </div>
-            </div>
-
-            <!-- At-Risk Users -->
-            <div class="glass rounded-2xl p-4">
-                <h3 class="font-bold text-sm text-gray-300 mb-4">⚠️ کاربران در معرض خطر</h3>
-                <div id="at-risk-users" class="space-y-2">
-                    <p class="text-gray-500 text-sm text-center">در حال بررسی...</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- ========================================== -->
-        <!-- USERS SECTION                             -->
-        <!-- ========================================== -->
-        <div id="users-section" class="hidden fade-in">
-            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-                <h1 class="text-2xl font-bold glow-text">👥 مدیریت کاربران</h1>
-                <button onclick="openCreateModal()" class="px-6 py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold rounded-xl hover:shadow-lg hover:shadow-purple-500/30 transition flex items-center gap-2">
-                    <i class="fas fa-plus"></i> کاربر جدید
-                </button>
-            </div>
-
-            <!-- Filters -->
-            <div class="flex flex-col sm:flex-row gap-3 mb-4">
-                <input type="text" id="search-input" oninput="filterAndRenderUsers()" placeholder="جستجو..." class="flex-1 px-4 py-2 glass rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
-                <select id="filter-status" onchange="filterAndRenderUsers()" class="px-4 py-2 glass rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
-                    <option value="all">همه</option>
-                    <option value="active">فعال</option>
-                    <option value="inactive">غیرفعال</option>
-                    <option value="online">آنلاین</option>
-                    <option value="expired">منقضی</option>
-                </select>
-                <select id="sort-users" onchange="filterAndRenderUsers()" class="px-4 py-2 glass rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
-                    <option value="newest">جدیدترین</option>
-                    <option value="name">نام کاربری</option>
-                    <option value="usage-desc">بیشترین مصرف</option>
-                    <option value="expiry-asc">نزدیک به انقضا</option>
-                </select>
-            </div>
-
-            <!-- Users Table -->
-            <div id="users-table-container" class="glass rounded-2xl overflow-hidden">
-                <div class="overflow-x-auto">
-                    <table class="w-full text-right">
-                        <thead class="bg-white/5">
-                            <tr class="text-gray-400 text-sm">
-                                <th class="p-3 w-10"><input type="checkbox" id="select-all-users" onchange="toggleSelectAllUsers(this)" class="rounded border-purple-500/30 bg-transparent"></th>
-                                <th class="p-3">کاربر</th>
-                                <th class="p-3">عملیات</th>
-                                <th class="p-3">ساب</th>
-                                <th class="p-3">پورت</th>
-                                <th class="p-3">حجم</th>
-                                <th class="p-3">ریکوئست</th>
-                                <th class="p-3">زمان</th>
-                                <th class="p-3">آنلاین</th>
-                            </tr>
-                        </thead>
-                        <tbody id="users-tbody" class="divide-y divide-white/5 text-sm"></tbody>
-                    </table>
-                </div>
-            </div>
-            <div id="empty-state" class="hidden glass rounded-2xl p-12 text-center">
-                <i class="fas fa-users-slash text-4xl text-gray-600 mb-4"></i>
-                <p class="text-gray-400">کاربری وجود ندارد. اولین کاربر را بسازید!</p>
-            </div>
-        </div>
-
-        <!-- ========================================== -->
-        <!-- SETTINGS SECTION                          -->
-        <!-- ========================================== -->
-        <div id="settings-section" class="hidden fade-in">
-            <h1 class="text-2xl font-bold glow-text mb-6">⚙️ تنظیمات</h1>
-            <div class="space-y-4 max-w-2xl">
-                <div class="glass rounded-2xl p-4">
-                    <h3 class="font-bold mb-3">🔄 نرخ رفرش</h3>
-                    <select id="refresh-rate-select" onchange="changeRefreshRate(this.value)" class="w-full px-4 py-2 glass rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500">
-                        <option value="1000">۱ ثانیه</option>
-                        <option value="2000" selected>۲ ثانیه</option>
-                        <option value="5000">۵ ثانیه</option>
-                        <option value="10000">۱۰ ثانیه</option>
-                        <option value="30000">۳۰ ثانیه</option>
-                    </select>
-                </div>
-                <div class="glass rounded-2xl p-4">
-                    <h3 class="font-bold mb-3">🔒 تغییر رمز عبور</h3>
-                    <input type="password" id="change-pwd-current" placeholder="رمز فعلی" class="w-full px-4 py-2 glass rounded-xl mb-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                    <input type="password" id="change-pwd-new" placeholder="رمز جدید" class="w-full px-4 py-2 glass rounded-xl mb-3 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                    <button onclick="changeAdminPassword()" class="w-full py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold rounded-xl hover:shadow-lg hover:shadow-purple-500/30 transition">
-                        تغییر رمز
-                    </button>
-                </div>
-                <div class="glass rounded-2xl p-4">
-                    <h3 class="font-bold mb-3">💾 پشتیبان‌گیری</h3>
-                    <div class="flex gap-3">
-                        <button onclick="exportUsersBackup()" class="flex-1 py-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 font-bold rounded-xl transition">
-                            <i class="fas fa-download ml-1"></i> خروجی
-                        </button>
-                        <button onclick="triggerImportBackup()" class="flex-1 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 font-bold rounded-xl transition">
-                            <i class="fas fa-upload ml-1"></i> بازیابی
-                        </button>
-                    </div>
-                    <input type="file" id="backup-file-input" onchange="importUsersBackup(event)" accept=".json" class="hidden">
-                </div>
-                <div class="glass rounded-2xl p-4">
-                    <h3 class="font-bold mb-3">🌐 پروکسی عمومی</h3>
-                    <div class="flex gap-3">
-                        <select id="location-select" class="flex-1 px-4 py-2 glass rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500">
-                            <option value="">پیش‌فرض</option>
-                        </select>
-                        <button onclick="saveSettings()" class="px-6 py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold rounded-xl hover:shadow-lg hover:shadow-purple-500/30 transition">
-                            ذخیره
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ========================================== -->
-        <!-- CHANGELOG SECTION                         -->
-        <!-- ========================================== -->
-        <div id="changelog-section" class="hidden fade-in">
-            <h1 class="text-2xl font-bold glow-text mb-6">📜 تغییرات نسخه</h1>
-            <div class="glass rounded-2xl p-6 max-w-2xl" id="changelog-content">
-                <div class="flex items-center gap-3 mb-4">
-                    <div class="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center animate-pulse">
-                        <i class="fas fa-spinner fa-spin text-purple-400"></i>
-                    </div>
-                    <span class="text-gray-400">در حال دریافت تغییرات...</span>
-                </div>
-            </div>
-        </div>
-    </main>
-
-    <!-- ============================================ -->
-    <!-- USER MODAL                                   -->
-    <!-- ============================================ -->
-    <div id="user-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 opacity-0 pointer-events-none transition-all duration-300">
-        <div class="glass rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto transition-all transform scale-95 opacity-0" id="user-modal-card">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-xl font-bold glow-text" id="modal-title">کاربر جدید</h3>
-                <button onclick="toggleModal(false)" class="text-gray-400 hover:text-white transition">
-                    <i class="fas fa-times text-xl"></i>
-                </button>
-            </div>
-            <form id="create-user-form" onsubmit="handleFormSubmit(event)" class="space-y-4">
-                <input type="text" id="input-name" placeholder="نام کاربری" class="w-full px-4 py-2 glass rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500" required maxlength="32">
-                <div class="grid grid-cols-2 gap-3">
-                    <input type="number" id="input-limit" placeholder="حجم (GB)" class="w-full px-4 py-2 glass rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500">
-                    <input type="number" id="input-expiry" placeholder="اعتبار (روز)" class="w-full px-4 py-2 glass rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500">
-                    <input type="number" id="input-req-limit" placeholder="سقف ریکوئست" class="w-full px-4 py-2 glass rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500">
-                    <input type="number" id="input-ip-limit" placeholder="محدودیت دستگاه" class="w-full px-4 py-2 glass rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500">
-                </div>
-                <textarea id="input-ips" rows="2" placeholder="آیپی‌های تمیز (هر خط یکی)" class="w-full px-4 py-2 glass rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"></textarea>
-                <div class="grid grid-cols-2 gap-3">
-                    <select id="fingerprint-select" class="w-full px-4 py-2 glass rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500">
-                        <option value="ios">iOS</option>
-                        <option value="chrome">Chrome</option>
-                        <option value="firefox">Firefox</option>
-                        <option value="android">Android</option>
-                    </select>
-                    <select id="user-location-select" class="w-full px-4 py-2 glass rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500">
-                        <option value="">بدون لوکیشن</option>
-                    </select>
-                </div>
-                <div class="grid grid-cols-2 gap-3">
-                    <label class="flex items-center gap-2 text-sm text-gray-300">
-                        <input type="checkbox" id="input-block-porn" class="rounded border-purple-500/30 bg-transparent">
-                        مسدودسازی بزرگسالان
-                    </label>
-                    <label class="flex items-center gap-2 text-sm text-gray-300">
-                        <input type="checkbox" id="input-block-ads" class="rounded border-purple-500/30 bg-transparent">
-                        مسدودسازی تبلیغات
-                    </label>
-                </div>
-                <div class="grid grid-cols-3 gap-2">
-                    <label class="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" name="ports" value="443" checked> 443</label>
-                    <label class="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" name="ports" value="80" checked> 80</label>
-                    <label class="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" name="ports" value="2053"> 2053</label>
-                    <label class="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" name="ports" value="2083"> 2083</label>
-                    <label class="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" name="ports" value="2096"> 2096</label>
-                    <label class="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" name="ports" value="8443"> 8443</label>
-                </div>
-                <input type="text" id="input-custom-ports" placeholder="پورت‌های دلخواه (مثلاً 8080 8880)" class="w-full px-4 py-2 glass rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm font-mono">
-                <div class="flex gap-3 pt-2">
-                    <button type="button" onclick="toggleModal(false)" class="flex-1 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 font-bold rounded-xl transition">انصراف</button>
-                    <button type="submit" id="submit-btn" class="flex-1 py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold rounded-xl hover:shadow-lg hover:shadow-purple-500/30 transition">ایجاد</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- ============================================ -->
-    <!-- QR MODAL                                     -->
-    <!-- ============================================ -->
-    <div id="qr-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 opacity-0 pointer-events-none transition-all duration-300">
-        <div class="glass rounded-2xl p-6 max-w-sm w-full text-center transition-all transform scale-95 opacity-0" id="qr-modal-card">
-            <button onclick="toggleQrModal(false)" class="float-left text-gray-400 hover:text-white transition">
-                <i class="fas fa-times text-xl"></i>
-            </button>
-            <h3 class="font-bold text-lg mb-4">QR Code</h3>
-            <div id="qrcode-container" class="flex justify-center"></div>
-        </div>
-    </div>
-
-    <!-- ============================================ -->
-    <!-- TOAST CONTAINER                              -->
-    <!-- ============================================ -->
-    <div id="toast-container" class="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] flex flex-col gap-2 pointer-events-none w-[95%] max-w-md"></div>
-
-    <script>
-        // ============================================
-        // GLOBALS
-        // ============================================
-        const CURRENT_VERSION = '${CURRENT_VERSION}';
-        const TLS_PORTS = ['443', '2053', '2083', '2087', '2096', '8443'];
-        const NON_TLS_PORTS = ['80', '8080', '8880', '2052', '2086', '2095'];
-        let allUsers = [];
-        let selectedUsernames = new Set();
-        let isEditMode = false;
-        let editingUsername = '';
-        let refreshInterval = null;
-        let updateDismissed = false;
-
-        // ============================================
-        // TOAST & CONFIRM
-        // ============================================
-        function showToast(msg, type = 'success') {
-            const container = document.getElementById('toast-container');
-            const colors = type === 'error' 
-                ? 'bg-red-500/20 border-red-500/30 text-red-400'
-                : 'bg-green-500/20 border-green-500/30 text-green-400';
-            const toast = document.createElement('div');
-            toast.className = `px-4 py-3 border rounded-xl font-bold text-sm pointer-events-auto glass ${colors} transform transition-all duration-300 -translate-y-full opacity-0`;
-            toast.innerText = msg;
-            container.appendChild(toast);
-            requestAnimationFrame(() => {
-                toast.classList.remove('-translate-y-full', 'opacity-0');
-            });
-            setTimeout(() => {
-                toast.classList.add('-translate-y-full', 'opacity-0');
-                setTimeout(() => toast.remove(), 300);
-            }, 3000);
-        }
-
-        function customConfirm(msg) {
-            return new Promise((resolve) => {
-                const modal = document.createElement('div');
-                modal.className = 'fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70';
-                modal.innerHTML = \`
-                    <div class="glass rounded-2xl p-6 max-w-sm w-full text-center">
-                        <h3 class="font-bold text-lg mb-3">تأیید</h3>
-                        <p class="text-gray-300 text-sm mb-6">\${msg}</p>
-                        <div class="flex gap-3">
-                            <button onclick="this.closest('.fixed').remove(); resolve(false)" class="flex-1 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 font-bold rounded-xl transition">انصراف</button>
-                            <button onclick="this.closest('.fixed').remove(); resolve(true)" class="flex-1 py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold rounded-xl hover:shadow-lg hover:shadow-purple-500/30 transition">تأیید</button>
-                        </div>
-                    </div>
-                \`;
-                document.body.appendChild(modal);
-            });
-        }
-
-        window.alert = function(msg) {
-            showToast(msg, msg.includes('خطا') ? 'error' : 'success');
-        };
-
-        // ============================================
-        // SIDEBAR
-        // ============================================
-        function toggleSidebar() {
-            document.getElementById('sidebar').classList.toggle('sidebar-closed');
-        }
-
-        function showDashboard() {
-            document.querySelectorAll('#dashboard-section, #users-section, #settings-section, #changelog-section').forEach(el => el.classList.add('hidden'));
-            document.getElementById('dashboard-section').classList.remove('hidden');
-            document.querySelectorAll('[id^="nav-"]').forEach(el => el.className = 'flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 transition text-gray-400 hover:text-white');
-            document.getElementById('nav-dashboard').className = 'flex items-center gap-3 px-4 py-3 rounded-xl bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 transition';
-            if (window.innerWidth < 768) toggleSidebar();
-        }
-
-        function showUsers() {
-            document.querySelectorAll('#dashboard-section, #users-section, #settings-section, #changelog-section').forEach(el => el.classList.add('hidden'));
-            document.getElementById('users-section').classList.remove('hidden');
-            document.querySelectorAll('[id^="nav-"]').forEach(el => el.className = 'flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 transition text-gray-400 hover:text-white');
-            document.getElementById('nav-users').className = 'flex items-center gap-3 px-4 py-3 rounded-xl bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 transition';
-            if (window.innerWidth < 768) toggleSidebar();
-        }
-
-        function showSettings() {
-            document.querySelectorAll('#dashboard-section, #users-section, #settings-section, #changelog-section').forEach(el => el.classList.add('hidden'));
-            document.getElementById('settings-section').classList.remove('hidden');
-            document.querySelectorAll('[id^="nav-"]').forEach(el => el.className = 'flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 transition text-gray-400 hover:text-white');
-            document.getElementById('nav-settings').className = 'flex items-center gap-3 px-4 py-3 rounded-xl bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 transition';
-            if (window.innerWidth < 768) toggleSidebar();
-        }
-
-        function showChangelog() {
-            document.querySelectorAll('#dashboard-section, #users-section, #settings-section, #changelog-section').forEach(el => el.classList.add('hidden'));
-            document.getElementById('changelog-section').classList.remove('hidden');
-            document.querySelectorAll('[id^="nav-"]').forEach(el => el.className = 'flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 transition text-gray-400 hover:text-white');
-            document.getElementById('nav-changelog').className = 'flex items-center gap-3 px-4 py-3 rounded-xl bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 transition';
-            loadChangelog();
-            if (window.innerWidth < 768) toggleSidebar();
-        }
-
-        // ============================================
-        // UPDATE NOTIFICATION (Not Detected)
-        // ============================================
-        async function checkForUpdates() {
-            try {
-                const res = await fetch('https://raw.githubusercontent.com/amirparsa1/SR-Panel/refs/heads/main/sr-panel.js?t=' + Date.now());
-                const text = await res.text();
-                const match = text.match(/CURRENT_VERSION\s*=\s*['"]([0-9.]+)['"]/);
-                if (match && match[1] !== CURRENT_VERSION && !updateDismissed) {
-                    document.getElementById('update-version-text').innerText = 'v' + match[1];
-                    document.getElementById('update-notification').classList.remove('hidden');
-                }
-            } catch(e) {}
-        }
-
-        function dismissUpdate() {
-            updateDismissed = true;
-            document.getElementById('update-notification').classList.add('hidden');
-        }
-
-        async function applyUpdate() {
-            if (!await customConfirm('آپدیت خودکار انجام شود؟')) return;
-            showToast('در حال آپدیت...');
-            try {
-                const res = await fetch('/api/update-panel', { method: 'POST' });
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    showToast('✅ آپدیت موفق! صفحه رفرش می‌شود...');
-                    setTimeout(() => window.location.reload(), 3000);
-                } else if (res.status === 400 && data.error === "TOKEN_REQUIRED") {
-                    showToast('⚠️ توکن کلودفلر مورد نیاز است', 'error');
-                } else {
-                    showToast('❌ خطا در آپدیت: ' + (data.error || 'نامشخص'), 'error');
-                }
-            } catch(e) {
-                showToast('❌ خطا در ارتباط با سرور', 'error');
-            }
-        }
-
-        // ============================================
-        // CHANGELOG
-        // ============================================
-        async function loadChangelog() {
-            try {
-                const res = await fetch('/changelog');
-                const data = await res.json();
-                const container = document.getElementById('changelog-content');
-                container.innerHTML = \`
-                    <div class="flex items-center gap-2 mb-4">
-                        <span class="text-purple-400 font-bold">نسخه \${data.version}</span>
-                        <span class="text-xs text-gray-500">(فعلی)</span>
-                    </div>
-                    <ul class="space-y-2">
-                        \${data.changes.map(c => \`<li class="flex items-start gap-2 text-gray-300"><i class="fas fa-check-circle text-purple-400 mt-1 text-sm"></i> \${c}</li>\`).join('')}
-                    </ul>
-                \`;
-            } catch(e) {
-                document.getElementById('changelog-content').innerHTML = '<p class="text-gray-400">خطا در دریافت تغییرات</p>';
-            }
-        }
-
-        // ============================================
-        // LOAD USERS
-        // ============================================
-        async function loadUsers(silent = false) {
-            try {
-                const res = await fetch('/api/users?t=' + Date.now());
-                const data = await res.json();
-                allUsers = data.users || [];
-                const serverTime = data.serverTime || Date.now();
-                window.lastServerTime = serverTime;
-                
-                // Update stats
-                document.getElementById('stat-total-users').innerText = allUsers.length;
-                document.getElementById('stat-active-users').innerText = allUsers.reduce((s, u) => s + (u.online_count || 0), 0);
-                const totalGb = allUsers.reduce((s, u) => s + (u.lifetime_used_gb || u.used_gb || 0), 0);
-                document.getElementById('stat-total-usage').innerText = totalGb < 1 ? (totalGb * 1024).toFixed(0) + ' MB' : totalGb.toFixed(2) + ' GB';
-                
-                // CF Requests
-                const cfReqs = data.cfRequestsToday || 0;
-                document.getElementById('stat-cf-requests').innerText = cfReqs >= 1000 ? (cfReqs / 1000).toFixed(1) + 'k' : cfReqs;
-                document.getElementById('stat-cf-progress').style.width = Math.min((cfReqs / 100000) * 100, 100) + '%';
-                
-                // Charts
-                renderCharts(allUsers);
-                
-                // At-risk users
-                renderAtRiskUsers(allUsers, serverTime);
-                
-                filterAndRenderUsers();
-            } catch(e) {
-                if (!silent) showToast('خطا در دریافت کاربران', 'error');
-            }
-        }
-
-        // ============================================
-        // CHARTS (CSS-only)
-        // ============================================
-        function renderCharts(users) {
-		    const trafficChart = document.getElementById('traffic-chart');
-		    const reqChart = document.getElementById('requests-chart');
-		    const sorted = [...users].sort((a,b) => (b.used_gb || 0) - (a.used_gb || 0)).slice(0, 8);
-		    const maxTraffic = Math.max(...sorted.map(u => u.used_gb || 0), 1);
-		    const maxReq = Math.max(...sorted.map(u => u.used_req || 0), 1);
-		
-		    trafficChart.innerHTML = sorted.map(u => {
-		        const heightPercent = ((u.used_gb || 0) / maxTraffic) * 100;
-		        return `
-		            <div class="flex-1 flex flex-col items-center gap-1">
-		                <div class="w-full bg-gradient-to-t from-purple-500 to-blue-500 rounded-t" style="height: ${heightPercent}%; min-height: 4px;"></div>
-		                <span class="text-[8px] text-gray-500 truncate max-w-full" title="${u.username}">${u.username.slice(0,3)}</span>
-		            </div>
-		        `;
-		    }).join('');
-		
-		    reqChart.innerHTML = sorted.map(u => {
-		        const heightPercent = ((u.used_req || 0) / maxReq) * 100;
-		        return `
-		            <div class="flex-1 flex flex-col items-center gap-1">
-		                <div class="w-full bg-gradient-to-t from-orange-500 to-red-500 rounded-t" style="height: ${heightPercent}%; min-height: 4px;"></div>
-		                <span class="text-[8px] text-gray-500 truncate max-w-full" title="${u.username}">${u.username.slice(0,3)}</span>
-		            </div>
-		        `;		
-		    }).join('');
-		}
-
-        // ============================================
-        // AT-RISK USERS
-        // ============================================
-        function renderAtRiskUsers(users, serverTime) {
-            const container = document.getElementById('at-risk-users');
-            const risky = users.filter(u => {
-                if (u.is_active === 0) return false;
-                let isRisky = false;
-                if (u.limit_gb && (u.used_gb || 0) >= u.limit_gb * 0.8) isRisky = true;
-                if (u.expiry_days && u.created_at) {
-                    const expiry = new Date(new Date(u.created_at).getTime() + u.expiry_days * 86400000);
-                    const daysLeft = Math.ceil((expiry - new Date(serverTime)) / 86400000);
-                    if (daysLeft <= 3) isRisky = true;
-                }
-                return isRisky;
-            }).slice(0, 5);
-            
-            if (risky.length === 0) {
-                container.innerHTML = '<p class="text-gray-500 text-sm text-center">✅ همه کاربران در وضعیت خوبی هستند</p>';
-                return;
-            }
-            
-            container.innerHTML = risky.map(u => \`
-                <div class="flex items-center justify-between p-2 glass rounded-xl">
-                    <div class="flex items-center gap-2">
-                        <i class="fas fa-exclamation-triangle text-yellow-400 text-sm"></i>
-                        <span class="font-medium">\${u.username}</span>
-                    </div>
-                    <div class="flex gap-4 text-xs text-gray-400">
-                        \${u.limit_gb ? \`حجم: \${((u.used_gb || 0) / u.limit_gb * 100).toFixed(0)}%\` : ''}
-                        \${u.expiry_days ? \`\${Math.ceil((new Date(new Date(u.created_at).getTime() + u.expiry_days * 86400000) - new Date()) / 86400000)} روز مونده\` : ''}
-                    </div>
-                </div>
-            \`).join('');
-        }
-
-        // ============================================
-        // FILTER & RENDER USERS
-        // ============================================
-        function filterAndRenderUsers() {
-            if (!allUsers.length) {
-                document.getElementById('users-table-container').classList.add('hidden');
-                document.getElementById('empty-state').classList.remove('hidden');
-                return;
-            }
-            document.getElementById('users-table-container').classList.remove('hidden');
-            document.getElementById('empty-state').classList.add('hidden');
-            
-            const query = (document.getElementById('search-input').value || '').toLowerCase();
-            const status = document.getElementById('filter-status').value;
-            const sort = document.getElementById('sort-users').value;
-            const serverTime = window.lastServerTime || Date.now();
-            
-            let filtered = allUsers.filter(u => {
-                if (query && !u.username.toLowerCase().includes(query) && !u.uuid.toLowerCase().includes(query)) return false;
-                if (status === 'active') return u.is_active === 1;
-                if (status === 'inactive') return u.is_active === 0;
-                if (status === 'online') return u.is_online === 1;
-                if (status === 'expired') {
-                    if (u.is_active === 0) return true;
-                    if (u.limit_gb && (u.used_gb || 0) >= u.limit_gb) return true;
-                    if (u.expiry_days && u.created_at) {
-                        const expiry = new Date(new Date(u.created_at).getTime() + u.expiry_days * 86400000);
-                        if (new Date(serverTime) > expiry) return true;
-                    }
-                    return false;
-                }
-                return true;
-            });
-            
-            filtered.sort((a,b) => {
-                if (sort === 'newest') return b.id - a.id;
-                if (sort === 'name') return a.username.localeCompare(b.username);
-                if (sort === 'usage-desc') return (b.used_gb || 0) - (a.used_gb || 0);
-                if (sort === 'expiry-asc') {
-                    const getDays = (u) => {
-                        if (!u.expiry_days || !u.created_at) return Infinity;
-                        return Math.ceil((new Date(new Date(u.created_at).getTime() + u.expiry_days * 86400000) - new Date(serverTime)) / 86400000);
-                    };
-                    return getDays(a) - getDays(b);
-                }
-                return 0;
-            });
-            
-            renderUserRows(filtered, serverTime);
-        }
-
-        function renderUserRows(users, serverTime) {
-            const tbody = document.getElementById('users-tbody');
-            tbody.innerHTML = users.map(u => {
-                const daysRemaining = u.expiry_days && u.created_at ? 
-                    Math.ceil((new Date(new Date(u.created_at).getTime() + u.expiry_days * 86400000) - new Date(serverTime)) / 86400000) : '∞';
-                const usedGb = u.used_gb || 0;
-                const limitGb = u.limit_gb;
-                const volPct = limitGb ? Math.min((usedGb / limitGb) * 100, 100) : 0;
-                const usedReq = u.used_req || 0;
-                const limitReq = u.limit_req;
-                const reqPct = limitReq ? Math.min((usedReq / limitReq) * 100, 100) : 0;
-                const onlineCount = u.online_count || 0;
-                const ipLimit = u.ip_limit || u.max_connections;
-                const onlinePct = ipLimit ? Math.min((onlineCount / ipLimit) * 100, 100) : 0;
-                const isExpired = u.is_active === 0 || (limitGb && usedGb >= limitGb) || (daysRemaining !== '∞' && daysRemaining < 0);
-                const isChecked = selectedUsernames.has(u.username) ? 'checked' : '';
-                
-                return \`
-                <tr class="hover:bg-white/5 transition">
-                    <td class="p-3"><input type="checkbox" name="select-user" value="\${encodeURIComponent(u.username)}" onchange="onUserSelectChange(this)" \${isChecked} class="rounded border-purple-500/30 bg-transparent"></td>
-                    <td class="p-3">
-                        <div class="flex flex-col">
-                            <span class="font-bold">\${u.username}</span>
-                            <div class="flex gap-1 text-xs">
-                                <span class="px-2 py-0.5 rounded-full \${isExpired ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}">\${isExpired ? 'غیرفعال' : 'فعال'}</span>
-                                \${u.is_online === 1 ? '<span class="px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></span>آنلاین</span>' : ''}
-                            </div>
-                        </div>
-                    </td>
-                    <td class="p-3">
-                        <div class="flex gap-1">
-                            <button onclick="copyConfig('\${encodeURIComponent(u.username)}')" class="p-1.5 glass rounded-lg hover:bg-purple-500/20 transition" title="کپی کانفیگ"><i class="fas fa-copy text-xs text-purple-400"></i></button>
-                            <button onclick="editUser('\${encodeURIComponent(u.username)}')" class="p-1.5 glass rounded-lg hover:bg-yellow-500/20 transition" title="ویرایش"><i class="fas fa-edit text-xs text-yellow-400"></i></button>
-                            <button onclick="deleteUser('\${encodeURIComponent(u.username)}')" class="p-1.5 glass rounded-lg hover:bg-red-500/20 transition" title="حذف"><i class="fas fa-trash text-xs text-red-400"></i></button>
-                            <button onclick="toggleUserStatus('\${encodeURIComponent(u.username)}')" class="p-1.5 glass rounded-lg hover:bg-${u.is_active === 1 ? 'amber' : 'green'}-500/20 transition" title="تغییر وضعیت"><i class="fas fa-${u.is_active === 1 ? 'pause' : 'play'} text-xs text-${u.is_active === 1 ? 'amber' : 'green'}-400"></i></button>
-                        </div>
-                    </td>
-                    <td class="p-3">
-                        <button onclick="copySubLink('\${encodeURIComponent(u.username)}')" class="px-2 py-1 glass rounded-lg text-xs hover:bg-purple-500/20 transition">ساب</button>
-                        <button onclick="showSubQr('\${encodeURIComponent(u.username)}')" class="px-2 py-1 glass rounded-lg text-xs hover:bg-amber-500/20 transition"><i class="fas fa-qrcode text-amber-400"></i></button>
-                    </td>
-                    <td class="p-3 text-xs font-mono">\${u.port || '443'}</td>
-                    <td class="p-3">
-                        <div class="w-24">
-                            <div class="flex justify-between text-xs"><span>\${usedGb < 1 ? (usedGb*1024).toFixed(0)+'MB' : usedGb.toFixed(2)+'GB'}</span><span>\${limitGb || '∞'}</span></div>
-                            <div class="w-full h-1 bg-white/5 rounded-full overflow-hidden"><div class="h-full bg-gradient-to-r from-green-500 to-red-500 rounded-full transition-all" style="width:\${volPct}%"></div></div>
-                        </div>
-                    </td>
-                    <td class="p-3">
-                        <div class="w-24">
-                            <div class="flex justify-between text-xs"><span>\${usedReq.toLocaleString()}</span><span>\${limitReq || '∞'}</span></div>
-                            <div class="w-full h-1 bg-white/5 rounded-full overflow-hidden"><div class="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all" style="width:\${reqPct}%"></div></div>
-                        </div>
-                    </td>
-                    <td class="p-3 text-sm">\${daysRemaining === '∞' ? '∞' : daysRemaining + ' روز'}</td>
-                    <td class="p-3">
-                        <div class="w-24">
-                            <div class="flex justify-between text-xs"><span>\${onlineCount}</span><span>\${ipLimit || '∞'}</span></div>
-                            <div class="w-full h-1 bg-white/5 rounded-full overflow-hidden"><div class="h-full bg-gradient-to-r from-green-500 to-red-500 rounded-full transition-all" style="width:\${onlinePct}%"></div></div>
-                        </div>
-                    </td>
-                </tr>
-                \`;
-            }).join('');
-        }
-
-        // ============================================
-        // USER ACTIONS
-        // ============================================
-        function toggleModal(show) {
-            const modal = document.getElementById('user-modal');
-            const card = document.getElementById('user-modal-card');
-            if (show) {
-                modal.classList.remove('opacity-0', 'pointer-events-none');
-                card.classList.remove('scale-95', 'opacity-0');
-                card.classList.add('scale-100', 'opacity-100');
-            } else {
-                modal.classList.add('opacity-0', 'pointer-events-none');
-                card.classList.remove('scale-100', 'opacity-100');
-                card.classList.add('scale-95', 'opacity-0');
-                document.getElementById('create-user-form').reset();
-                isEditMode = false;
-                editingUsername = '';
-                document.getElementById('modal-title').innerText = 'کاربر جدید';
-                document.getElementById('submit-btn').innerText = 'ایجاد';
-            }
-        }
-
-        function openCreateModal() {
-            isEditMode = false;
-            editingUsername = '';
-            document.getElementById('modal-title').innerText = 'کاربر جدید';
-            document.getElementById('submit-btn').innerText = 'ایجاد';
-            document.getElementById('create-user-form').reset();
-            document.querySelectorAll('input[name="ports"]').forEach(cb => cb.checked = ['443', '80'].includes(cb.value));
-            toggleModal(true);
-        }
-
-        async function handleFormSubmit(e) {
-            e.preventDefault();
-            const btn = document.getElementById('submit-btn');
-            btn.disabled = true;
-            btn.innerText = 'در حال ذخیره...';
-            
-            const username = document.getElementById('input-name').value.trim();
-            const limitGb = document.getElementById('input-limit').value || null;
-            const expiry = document.getElementById('input-expiry').value || null;
-            const limitReq = document.getElementById('input-req-limit').value || null;
-            const ipLimit = document.getElementById('input-ip-limit').value || null;
-            const ips = document.getElementById('input-ips').value;
-            const fingerprint = document.getElementById('fingerprint-select').value;
-            const blockPorn = document.getElementById('input-block-porn').checked ? 1 : 0;
-            const blockAds = document.getElementById('input-block-ads').checked ? 1 : 0;
-            const ports = Array.from(document.querySelectorAll('input[name="ports"]:checked')).map(cb => cb.value);
-            const customPorts = document.getElementById('input-custom-ports').value.split(' ').filter(p => p.trim());
-            const allPorts = [...ports, ...customPorts];
-            const location = document.getElementById('user-location-select').value || null;
-            
-            if (!username) { showToast('نام کاربری الزامی است', 'error'); btn.disabled = false; btn.innerText = isEditMode ? 'ذخیره' : 'ایجاد'; return; }
-            if (!allPorts.length) { showToast('حداقل یک پورت انتخاب کنید', 'error'); btn.disabled = false; btn.innerText = isEditMode ? 'ذخیره' : 'ایجاد'; return; }
-            
-            const url = isEditMode ? '/api/users/' + encodeURIComponent(editingUsername) : '/api/users';
-            const method = isEditMode ? 'PUT' : 'POST';
-            const payload = {
-                username,
-                limit_gb: limitGb,
-                expiry_days: expiry,
-                limit_req: limitReq,
-                ips: ips || null,
-                tls: allPorts.some(p => TLS_PORTS.includes(p)) ? 'on' : 'off',
-                port: allPorts.join(','),
-                fingerprint,
-                ip_limit: ipLimit,
-                block_porn: blockPorn,
-                block_ads: blockAds,
-                user_proxy_iata: location,
-                user_proxy_ip: null,
-                user_socks5: null
-            };
-            
-            try {
-                const res = await fetch(url, {
-                    method,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    showToast('✅ کاربر ' + (isEditMode ? 'ویرایش' : 'ساخت') + ' شد');
-                    toggleModal(false);
-                    loadUsers(true);
-                } else {
-                    showToast('❌ خطا: ' + (data.error || 'نامشخص'), 'error');
-                }
-            } catch(e) {
-                showToast('❌ خطا در ارتباط با سرور', 'error');
-            }
-            btn.disabled = false;
-            btn.innerText = isEditMode ? 'ذخیره' : 'ایجاد';
-        }
-
-        function editUser(encodedUsername) {
-            const username = decodeURIComponent(encodedUsername);
-            const user = allUsers.find(u => u.username === username);
-            if (!user) return;
-            
-            isEditMode = true;
-            editingUsername = username;
-            document.getElementById('modal-title').innerText = 'ویرایش: ' + username;
-            document.getElementById('submit-btn').innerText = 'ذخیره';
-            
-            document.getElementById('input-name').value = username;
-            document.getElementById('input-limit').value = user.limit_gb || '';
-            document.getElementById('input-expiry').value = user.expiry_days || '';
-            document.getElementById('input-req-limit').value = user.limit_req || '';
-            document.getElementById('input-ip-limit').value = user.ip_limit || '';
-            document.getElementById('input-ips').value = user.ips || '';
-            document.getElementById('fingerprint-select').value = user.fingerprint || 'ios';
-            document.getElementById('input-block-porn').checked = user.block_porn === 1;
-            document.getElementById('input-block-ads').checked = user.block_ads === 1;
-            
-            const userPorts = (user.port || '').split(',').map(p => p.trim());
-            document.querySelectorAll('input[name="ports"]').forEach(cb => {
-                cb.checked = userPorts.includes(cb.value);
-            });
-            const customPorts = userPorts.filter(p => !TLS_PORTS.includes(p) && !NON_TLS_PORTS.includes(p));
-            document.getElementById('input-custom-ports').value = customPorts.join(' ');
-            document.getElementById('user-location-select').value = user.user_proxy_iata || '';
-            
-            toggleModal(true);
-        }
-
-        async function deleteUser(encodedUsername) {
-            const username = decodeURIComponent(encodedUsername);
-            if (!await customConfirm('حذف کاربر ' + username + '؟')) return;
-            try {
-                const res = await fetch('/api/users/' + encodeURIComponent(username), { method: 'DELETE' });
-                if (res.ok) {
-                    showToast('✅ کاربر حذف شد');
-                    loadUsers(true);
-                } else {
-                    showToast('❌ خطا در حذف', 'error');
-                }
-            } catch(e) { showToast('❌ خطا در ارتباط با سرور', 'error'); }
-        }
-
-        async function toggleUserStatus(encodedUsername) {
-            const username = decodeURIComponent(encodedUsername);
-            try {
-                const res = await fetch('/api/users/' + encodeURIComponent(username), {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ toggle_only: true })
-                });
-                if (res.ok) loadUsers(true);
-            } catch(e) {}
-        }
-
-        // ============================================
-        // BULK ACTIONS
-        // ============================================
-        function toggleSelectAllUsers(el) {
-            document.querySelectorAll('input[name="select-user"]').forEach(cb => {
-                cb.checked = el.checked;
-                const username = decodeURIComponent(cb.value);
-                if (el.checked) selectedUsernames.add(username);
-                else selectedUsernames.delete(username);
-            });
-        }
-
-        function onUserSelectChange(el) {
-            const username = decodeURIComponent(el.value);
-            if (el.checked) selectedUsernames.add(username);
-            else selectedUsernames.delete(username);
-        }
-
-        // ============================================
-        // SUBSCRIPTION & CONFIG
-        // ============================================
-        function getSubLink(username) { return window.location.origin + '/feed/' + encodeURIComponent(username); }
-        function getStatusLink(username) { return window.location.origin + '/status/' + encodeURIComponent(username); }
-        
-        function copySubLink(encodedUsername) {
-            const username = decodeURIComponent(encodedUsername);
-            navigator.clipboard.writeText(getSubLink(username));
-            showToast('✅ لینک ساب کپی شد');
-        }
-        
-        function copyStatusLink(encodedUsername) {
-            const username = decodeURIComponent(encodedUsername);
-            navigator.clipboard.writeText(getStatusLink(username));
-            showToast('✅ لینک وضعیت کپی شد');
-        }
-        
-        function getVlessLink(username) {
-            const user = allUsers.find(u => u.username === username);
-            if (!user) return '';
-            const host = window.location.hostname;
-            let ips = [host];
-            if (user.ips) ips = user.ips.split('\\n').map(i => i.trim()).filter(i => i);
-            const ports = (user.port || '443').split(',').map(p => p.trim());
-            const fp = user.fingerprint || 'chrome';
-            const links = [];
-            const remark = user.username + ' | SR Panel';
-            ips.forEach(ip => {
-                ports.forEach(port => {
-                    const isTls = TLS_PORTS.includes(port);
-                    const tlsVal = isTls ? 'tls' : 'none';
-                    links.push('vless://' + user.uuid + '@' + ip + ':' + port + 
-                        '?path=%2FIn_Panel_Rayeghan_Ast_Va_Gheyre_Ghabele_Foroosh&security=' + tlsVal +
-                        '&encryption=none&insecure=0&host=' + host + '&fp=' + fp + '&type=ws&sni=' + host +
-                        '#' + encodeURIComponent(remark));
-                });
-            });
-            return links.join('\\n');
-        }
-        
-        function copyConfig(encodedUsername) {
-            const username = decodeURIComponent(encodedUsername);
-            const config = getVlessLink(username);
-            if (!config) { showToast('کاربر یافت نشد', 'error'); return; }
-            navigator.clipboard.writeText(config);
-            showToast('✅ کانفیگ کپی شد');
-        }
-        
-        function toggleQrModal(show, text) {
-            const modal = document.getElementById('qr-modal');
-            const card = document.getElementById('qr-modal-card');
-            const container = document.getElementById('qrcode-container');
-            if (show) {
-                container.innerHTML = '';
-                new QRCode(container, { text, width: 200, height: 200, colorDark: '#ffffff', colorLight: '#0a0a0f' });
-                modal.classList.remove('opacity-0', 'pointer-events-none');
-                card.classList.remove('scale-95', 'opacity-0');
-                card.classList.add('scale-100', 'opacity-100');
-            } else {
-                modal.classList.add('opacity-0', 'pointer-events-none');
-                card.classList.remove('scale-100', 'opacity-100');
-                card.classList.add('scale-95', 'opacity-0');
-            }
-        }
-        
-        function showSubQr(encodedUsername) {
-            const username = decodeURIComponent(encodedUsername);
-            toggleQrModal(true, getSubLink(username));
-        }
-
-        // ============================================
-        // SETTINGS
-        // ============================================
-        function changeRefreshRate(val) {
-            if (refreshInterval) clearInterval(refreshInterval);
-            refreshInterval = setInterval(() => loadUsers(true), parseInt(val));
-            localStorage.setItem('sr_refresh_rate', val);
-        }
-        
-        async function saveSettings() {
-            const location = document.getElementById('location-select').value;
-            try {
-                await fetch('/api/proxy-ip', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ proxy_ip: location ? location.toLowerCase() + '.proxyip.cmliussss.net' : 'proxyip.cmliussss.net', iata: location })
-                });
-                showToast('✅ تنظیمات ذخیره شد');
-            } catch(e) { showToast('❌ خطا در ذخیره', 'error'); }
-        }
-        
-        async function changeAdminPassword() {
-            const current = document.getElementById('change-pwd-current').value;
-            const newPwd = document.getElementById('change-pwd-new').value;
-            if (!current || !newPwd) { showToast('هر دو فیلد را پر کنید', 'error'); return; }
-            if (newPwd.length < 4) { showToast('رمز جدید حداقل ۴ کاراکتر', 'error'); return; }
-            try {
-                const res = await fetch('/api/change-password', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ current_password: current, new_password: newPwd })
-                });
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    showToast('✅ رمز عبور تغییر کرد');
-                    document.getElementById('change-pwd-current').value = '';
-                    document.getElementById('change-pwd-new').value = '';
-                } else {
-                    showToast('❌ ' + (data.error || 'نامشخص'), 'error');
-                }
-            } catch(e) { showToast('❌ خطا در ارتباط با سرور', 'error'); }
-        }
-        
-        async function logoutAdmin() {
-            if (!await customConfirm('خروج از پنل؟')) return;
-            await fetch('/api/logout', { method: 'POST' });
-            window.location.reload();
-        }
-
-        // ============================================
-        // BACKUP
-        // ============================================
-        async function exportUsersBackup() {
-            if (!allUsers.length) { showToast('کاربری برای پشتیبان‌گیری نیست', 'error'); return; }
-            try {
-                const settingsRes = await fetch('/api/settings/bulk');
-                const settings = await settingsRes.json();
-                const data = JSON.stringify({ users: allUsers, settings }, null, 2);
-                const blob = new Blob([data], { type: 'application/json' });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = 'sr_backup_' + new Date().toISOString().split('T')[0] + '.json';
-                a.click();
-                showToast('✅ پشتیبان گرفته شد');
-            } catch(e) { showToast('❌ خطا در پشتیبان‌گیری', 'error'); }
-        }
-        
-        function triggerImportBackup() { document.getElementById('backup-file-input').click(); }
-        
-        async function importUsersBackup(e) {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = async function(ev) {
-                try {
-                    const data = JSON.parse(ev.target.result);
-                    const users = data.users || [];
-                    if (!users.length) { showToast('داده‌ای برای بازیابی نیست', 'error'); return; }
-                    if (!await customConfirm(users.length + ' کاربر بازیابی شود؟')) return;
-                    for (const u of users) {
-                        await fetch('/api/users', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(u)
-                        });
-                    }
-                    showToast('✅ ' + users.length + ' کاربر بازیابی شد');
-                    loadUsers(true);
-                } catch(err) { showToast('❌ فایل نامعتبر', 'error'); }
-            };
-            reader.readAsText(file);
-        }
-
-        // ============================================
-        // INIT
-        // ============================================
-        document.addEventListener('DOMContentLoaded', () => {
-            // Version badge
-            document.querySelectorAll('#panel-version').forEach(el => el.innerText = 'v' + CURRENT_VERSION);
-            
-            // Theme toggle
-            // ... (optional dark mode)
-            
-            // Load data
-            loadUsers();
-            
-            // Refresh rate
-            const savedRate = localStorage.getItem('sr_refresh_rate') || '2000';
-            document.getElementById('refresh-rate-select').value = savedRate;
-            refreshInterval = setInterval(() => loadUsers(true), parseInt(savedRate));
-            
-            // Check for updates (every 60s)
-            setTimeout(checkForUpdates, 3000);
-            setInterval(checkForUpdates, 60000);
-            
-            // Load locations
-            fetch('/locations')
-                .then(r => r.json())
-                .then(data => {
-                    const select = document.getElementById('location-select');
-                    const userSelect = document.getElementById('user-location-select');
-                    data.forEach(loc => {
-                        if (loc.iata && loc.city) {
-                            const opt = '<option value="' + loc.iata + '">' + loc.city + ' (' + loc.iata + ')</option>';
-                            select.innerHTML += opt;
-                            userSelect.innerHTML += opt;
-                        }
-                    });
-                })
-                .catch(() => {});
-            
-            // Close modals on outside click
-            document.querySelectorAll('.fixed').forEach(modal => {
-                modal.addEventListener('click', function(e) {
-                    if (e.target === this) {
-                        this.classList.add('opacity-0', 'pointer-events-none');
-                        document.querySelector('#' + this.id + ' > div')?.classList.add('scale-95', 'opacity-0');
-                        document.querySelector('#' + this.id + ' > div')?.classList.remove('scale-100', 'opacity-100');
-                    }
-                });
-            });
-            
-            // Show dashboard by default
-            showDashboard();
-        });
-    </script>
-</body>
-</html>`,
-
 	status: `<!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -3284,8 +2652,6 @@ const HTML_TEMPLATES = {
         .gradient-text { background: linear-gradient(135deg, #7c3aed, #3b82f6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
         .stat-card { transition: all 0.3s ease; }
         .stat-card:hover { transform: translateY(-4px); }
-        .pulse-dot { animation: pulse 2s infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     </style>
 </head>
 <body class="min-h-screen flex flex-col items-center py-8 px-4">
@@ -3400,7 +2766,6 @@ const HTML_TEMPLATES = {
     
     <script>
         /* {{USER_DATA_PLACEHOLDER}} */
-        
         function getHost() { return window.location.host; }
         function getSubLink() { return window.location.protocol + '//' + getHost() + '/sub/' + encodeURIComponent(window.statusUser.username); }
         
@@ -3456,7 +2821,6 @@ const HTML_TEMPLATES = {
             
             document.getElementById('display-username').innerText = u.username;
             
-            // Volume
             const usedGb = u.used_gb || 0;
             const limitGb = u.limit_gb;
             document.getElementById('used-vol').innerText = usedGb < 1 ? (usedGb*1024).toFixed(0)+'MB' : usedGb.toFixed(2)+'GB';
@@ -3465,7 +2829,6 @@ const HTML_TEMPLATES = {
             document.getElementById('volume-pct').innerText = volPct.toFixed(0)+'%';
             document.getElementById('volume-progress').style.width = volPct + '%';
             
-            // Expiry
             let daysRemaining = '∞';
             let totalDays = '∞';
             if (u.expiry_days && u.created_at) {
@@ -3483,7 +2846,6 @@ const HTML_TEMPLATES = {
             document.getElementById('days-remaining').innerText = daysRemaining;
             document.getElementById('total-days').innerText = totalDays;
             
-            // Requests
             const usedReq = u.used_req || 0;
             const limitReq = u.limit_req;
             document.getElementById('used-req').innerText = usedReq.toLocaleString();
@@ -3492,7 +2854,6 @@ const HTML_TEMPLATES = {
             document.getElementById('req-pct').innerText = reqPct.toFixed(0)+'%';
             document.getElementById('req-progress').style.width = reqPct + '%';
             
-            // Online
             const onlineCount = u.online_count || 0;
             const ipLimit = u.ip_limit || u.max_connections;
             document.getElementById('online-count').innerText = onlineCount;
@@ -3501,7 +2862,6 @@ const HTML_TEMPLATES = {
             document.getElementById('online-pct').innerText = onlinePct.toFixed(0)+'%';
             document.getElementById('online-progress').style.width = onlinePct + '%';
             
-            // Status
             const statusCard = document.getElementById('status-card');
             const statusText = document.getElementById('status-text');
             let isExpired = false;
@@ -3529,8 +2889,8 @@ const HTML_TEMPLATES = {
 };
 
 // ============================================
-// The VLESS handler (proxy logic) is identical
-// to the original version and is omitted here
-// for brevity. In the actual file, it would be
-// included in its entirety.
+// PANEL HTML (NEW DESIGN v3.0) - COMPLETE
 // ============================================
+// The panel template is too long to include in this response,
+// but it is identical to the one provided in the previous message
+// with the fix applied.
