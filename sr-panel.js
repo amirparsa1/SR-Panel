@@ -27,63 +27,63 @@ const PRELOAD_RACE_DIAL = true;
 // NOTIFICATION HANDLER
 // ============================================
 async function handleNotification(request, env) {
-    const defaultNotification = {
-        active: true,
-        message: "🚀 به SR Panel خوش آمدید! پنل مدیریت رایگان شما",
-        color: "purple",
-        link: "https://github.com/amirparsa1/SR-Panel",
-        link_text: "مشاهده گیت‌هاب",
-        date: new Date().toISOString().split('T')[0],
-        version: CURRENT_VERSION
-    };
+	const defaultNotification = {
+		active: true,
+		message: "🚀 به SR Panel خوش آمدید! پنل مدیریت رایگان شما",
+		color: "purple",
+		link: "https://github.com/amirparsa1/SR-Panel",
+		link_text: "مشاهده گیت‌هاب",
+		date: new Date().toISOString().split('T')[0],
+		version: CURRENT_VERSION
+	};
 
-    try {
-        const githubRes = await fetch("https://raw.githubusercontent.com/amirparsa1/SR-Panel/refs/heads/main/notification.json?t=" + Date.now());
-        if (githubRes.ok) {
-            const data = await githubRes.json();
-            return new Response(JSON.stringify(data), {
-                headers: { "Content-Type": "application/json; charset=utf-8" }
-            });
-        }
-    } catch (e) { }
+	try {
+		const githubRes = await fetch("https://raw.githubusercontent.com/amirparsa1/SR-Panel/refs/heads/main/notification.json?t=" + Date.now());
+		if (githubRes.ok) {
+			const data = await githubRes.json();
+			return new Response(JSON.stringify(data), {
+				headers: { "Content-Type": "application/json; charset=utf-8" }
+			});
+		}
+	} catch (e) { }
 
-    return new Response(JSON.stringify(defaultNotification), {
-        headers: { "Content-Type": "application/json; charset=utf-8" }
-    });
+	return new Response(JSON.stringify(defaultNotification), {
+		headers: { "Content-Type": "application/json; charset=utf-8" }
+	});
 }
 
 export default {
-    async fetch(request, env, ctx) {
-        trackRequest(env, ctx);
-        await DbService.ensureSchema(env.DB);
-        const url = new URL(request.url);
+	async fetch(request, env, ctx) {
+		trackRequest(env, ctx);
+		await DbService.ensureSchema(env.DB);
+		const url = new URL(request.url);
 
-        if (Router.isWebSocketUpgrade(request) && url.pathname === "/In_Panel_Rayeghan_Ast_Va_Gheyre_Ghabele_Foroosh") {
-            return await Router.handleWebSocket(request, env, ctx);
-        }
-        if (Router.isSubscriptionPath(url.pathname)) {
-            return await Router.handleSubscription(url, env);
-        }
-        
-        // ✅ اینجا باید باشه (همون جایی که خودت نوشتی)
-        if (url.pathname === "/notification") {
-            return await handleNotification(request, env);
-        }
+		if (Router.isWebSocketUpgrade(request) && url.pathname === "/In_Panel_Rayeghan_Ast_Va_Gheyre_Ghabele_Foroosh") {
+			return await Router.handleWebSocket(request, env, ctx);
+		}
+		if (Router.isSubscriptionPath(url.pathname)) {
+			return await Router.handleSubscription(url, env);
+		}
 
-        if (url.pathname.startsWith("/api/") || url.pathname === "/locations") {
-            return await Router.handleApi(request, url, env, ctx);
-        }
-        if (url.pathname === "/panel" || url.pathname === "/login") {
-            return await Router.handlePanel(request, env);
-        }
-        if (url.pathname.startsWith("/status/")) {
-            return await Router.handleUserStatus(url, env);
-        }
+		// ✅ اینجا باید باشه (همون جایی که خودت نوشتی)
+		if (url.pathname === "/notification") {
+			return await handleNotification(request, env);
+		}
 
-        return new Response(HTML_TEMPLATES.nginx, {
-            headers: { "Content-Type": "text/html; charset=utf-8" },
-        });
-    },
+		if (url.pathname.startsWith("/api/") || url.pathname === "/locations") {
+			return await Router.handleApi(request, url, env, ctx);
+		}
+		if (url.pathname === "/panel" || url.pathname === "/login") {
+			return await Router.handlePanel(request, env);
+		}
+		if (url.pathname.startsWith("/status/")) {
+			return await Router.handleUserStatus(url, env);
+		}
+
+		return new Response(HTML_TEMPLATES.nginx, {
+			headers: { "Content-Type": "text/html; charset=utf-8" },
+		});
+	},
 };
 const Router = {
 	isWebSocketUpgrade(request) {
@@ -6192,39 +6192,38 @@ window.addEventListener('click', (e) => {
 		}
 
 		function showNotification(data) {
-    		// اگه قبلاً نوتیف دیده شده، دوباره نشون نده
-    		const today = new Date().toISOString().split('T')[0];
-    		const key = 'sr_notification_' + today;
-    		if (localStorage.getItem(key) === 'true') return;
-    
-    		// بنر نوتیف رو بساز
-    		const banner = document.createElement('div');
-    		banner.className = 'fixed top-0 left-0 right-0 z-[999] p-3 text-center text-sm font-bold animate-[slideDown_0.5s_ease] shadow-lg';
-    		banner.style.background = 'linear-gradient(135deg, #7c3aed, #3b82f6)';
-    		banner.style.color = '#fff';
-    		banner.style.borderBottom = '2px solid rgba(255,255,255,0.2)';
-    		banner.innerHTML = data.message;
-    
-    		if (data.link) {
-    		    banner.innerHTML += ` <a href="${data.link}" target="_blank" class="underline hover:opacity-80 transition ml-1 font-bold" style="color: #fff;">${data.link_text || 'بیشتر'}</a> `;
-    		}
-    
-    		// دکمه بستن
-    		const closeBtn = document.createElement('button');
-    		closeBtn.className = 'mr-4 text-white/70 hover:text-white transition text-lg leading-none';
-    		closeBtn.innerText = '✕';
-    		closeBtn.onclick = function() {
-    		    banner.remove();
-    		    localStorage.setItem(key, 'true');
-    		};
-    		banner.appendChild(closeBtn);
-    
-    		// اضافه کردن به صفحه
-    		document.body.prepend(banner);
-    
-    		// بعد از 10 ثانیه خودکار بسته میشه (اختیاری)
-    		// setTimeout(() => { banner.remove(); localStorage.setItem(key, 'true'); }, 10000);
-			}
+    const today = new Date().toISOString().split('T')[0];
+    const key = 'sr_notification_' + today;
+    if (localStorage.getItem(key) === 'true') return;
+
+    const banner = document.createElement('div');
+    banner.className = 'fixed top-0 left-0 right-0 z-[999] p-3 text-center text-sm font-bold animate-[slideDown_0.5s_ease] shadow-lg';
+    banner.style.background = 'linear-gradient(135deg, #7c3aed, #3b82f6)';
+    banner.style.color = '#fff';
+    banner.style.borderBottom = '2px solid rgba(255,255,255,0.2)';
+    banner.innerHTML = data.message;
+
+    if (data.link) {
+        const linkEl = document.createElement('a');
+        linkEl.href = data.link;
+        linkEl.target = '_blank';
+        linkEl.className = 'underline hover:opacity-80 transition ml-1 font-bold';
+        linkEl.style.color = '#fff';
+        linkEl.textContent = data.link_text || 'بیشتر';
+        banner.appendChild(linkEl);
+    }
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'mr-4 text-white/70 hover:text-white transition text-lg leading-none';
+    closeBtn.innerText = '✕';
+    closeBtn.onclick = function() {
+        banner.remove();
+        localStorage.setItem(key, 'true');
+    };
+    banner.appendChild(closeBtn);
+
+    document.body.prepend(banner);
+}
 
         document.addEventListener('DOMContentLoaded', () => {
             const u = window.statusUser;
