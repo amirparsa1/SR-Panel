@@ -6206,7 +6206,7 @@ window.addEventListener('click', (e) => {
     		banner.innerHTML = data.message;
     
     		if (data.link) {
-    		    banner.innerHTML += ` < a href="${data.link}" target="_blank" class= "underline hover:opacity-80 transition ml-1 font-bold" style="color: #fff;" > ${ data.link_text || 'بیشتر'}</a > `;
+    		    banner.innerHTML += ` <a href="${data.link}" target="_blank" class="underline hover:opacity-80 transition ml-1 font-bold" style="color: #fff;">${data.link_text || 'بیشتر'}</a> `;
     		}
     
     		// دکمه بستن
