@@ -18,8 +18,11 @@ const DOWNSTREAM_GRAIN_TAIL_THRESHOLD = 256;
 const DOWNSTREAM_GRAIN_SILENT_MS = 1;
 const TCP_CONCURRENCY = 2;
 const PRELOAD_RACE_DIAL = true;
-export default {
-	async function handleNotification(request, env) {
+
+// ============================================
+// NOTIFICATION HANDLER
+// ============================================
+async function handleNotification(request, env) {
 	const defaultNotification = {
 		active: true,
 		message: "🚀 به SR Panel خوش آمدید! پنل مدیریت رایگان شما",
@@ -38,39 +41,42 @@ export default {
 				headers: { "Content-Type": "application/json; charset=utf-8" }
 			});
 		}
-	} catch (e) { }
+	} catch (e) {}
 
 	return new Response(JSON.stringify(defaultNotification), {
 		headers: { "Content-Type": "application/json; charset=utf-8" }
 	});
-	}
+}
 
+export default {
 	async fetch(request, env, ctx) {
-	trackRequest(env, ctx);
-	await DbService.ensureSchema(env.DB);
-	const url = new URL(request.url);
-	if (Router.isWebSocketUpgrade(request) && url.pathname === "/In_Panel_Rayeghan_Ast_Va_Gheyre_Ghabele_Foroosh") {
-		return await Router.handleWebSocket(request, env, ctx);
-	}
-	if (Router.isSubscriptionPath(url.pathname)) {
-		return await Router.handleSubscription(url, env);
-	}
-	if (url.pathname.startsWith("/api/") || url.pathname === "/locations") {
-		return await Router.handleApi(request, url, env, ctx);
-	}
-	if (url.pathname === "/panel" || url.pathname === "/login") {
-		return await Router.handlePanel(request, env);
-	}
-	if (url.pathname.startsWith("/status/")) {
-		return await Router.handleUserStatus(url, env);
+		trackRequest(env, ctx);
+		await DbService.ensureSchema(env.DB);
+		const url = new URL(request.url);
+		
+		if (Router.isWebSocketUpgrade(request) && url.pathname === "/In_Panel_Rayeghan_Ast_Va_Gheyre_Ghabele_Foroosh") {
+			return await Router.handleWebSocket(request, env, ctx);
+		}
+		if (Router.isSubscriptionPath(url.pathname)) {
+			return await Router.handleSubscription(url, env);
+		}
+		if (url.pathname.startsWith("/api/") || url.pathname === "/locations") {
+			return await Router.handleApi(request, url, env, ctx);
+		}
+		if (url.pathname === "/panel" || url.pathname === "/login") {
+			return await Router.handlePanel(request, env);
+		}
+		if (url.pathname.startsWith("/status/")) {
+			return await Router.handleUserStatus(url, env);
+		}
+		// ✅ اینجا باید باشه، نه توی status
 		if (url.pathname === "/notification") {
 			return await handleNotification(request, env);
 		}
-	}
-	return new Response(HTML_TEMPLATES.nginx, {
-		headers: { "Content-Type": "text/html; charset=utf-8" },
-	});
-},
+		return new Response(HTML_TEMPLATES.nginx, {
+			headers: { "Content-Type": "text/html; charset=utf-8" },
+		});
+	},
 };
 const Router = {
 	isWebSocketUpgrade(request) {
