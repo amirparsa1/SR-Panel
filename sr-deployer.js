@@ -54,7 +54,7 @@ export default {
 				}
 				const dbUuid = dbData.result.uuid;
 				await new Promise((resolve) => setTimeout(resolve, 1000));
-				const githubRes = await fetch("https://raw.githubusercontent.com/amirparsa1/SR-Panel/refs/heads/main/zeus.js?t=" + Date.now());
+				const githubRes = await fetch("https://raw.githubusercontent.com/amirparsa1/SR-Panel/refs/heads/main/sr-panel.js?t=" + Date.now());
 				if (!githubRes.ok) throw new Error("خطا در دریافت سورس از گیت‌هاب.");
 				const zeusCode = await githubRes.text();
 				const metadata = {
@@ -181,7 +181,7 @@ export default {
 					throw new Error("Account not found");
 				}
 				const accountId = accData.result[0].id;
-				const githubRes = await fetch("https://raw.githubusercontent.com/amirparsa1/SR-Panel/refs/heads/main/zeus.js?t=" + Date.now());
+				const githubRes = await fetch("https://raw.githubusercontent.com/amirparsa1/SR-Panel/refs/heads/main/sr-panel.js?t=" + Date.now());
 				if (!githubRes.ok) throw new Error("Failed to fetch source from GitHub");
 				const newCode = await githubRes.text();
 				const bindingsRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${scriptName}/bindings`, { headers });
@@ -254,7 +254,7 @@ if (request.method === "POST" && url.pathname === "/api/reset-password") {
 		if (!queryData.success) {
 			throw new Error("Database query failed");
 		}
-		const githubRes = await fetch("https://raw.githubusercontent.com/amirparsa1/SR-Panel/refs/heads/main/zeus.js?t=" + Date.now());
+		const githubRes = await fetch("https://raw.githubusercontent.com/amirparsa1/SR-Panel/refs/heads/main/sr-panel.js?t=" + Date.now());
 		if (!githubRes.ok) throw new Error("Failed to fetch source from GitHub");
 		const newCode = await githubRes.text();
 		const newBindings = [];
