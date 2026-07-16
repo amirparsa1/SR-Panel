@@ -346,7 +346,7 @@ function getHtmlContent() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SR Panel Deployer</title>
+    <title>SR Root Panel Deployer</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" type="text/css" />
     <script>
@@ -375,13 +375,13 @@ function getHtmlContent() {
 </head>
 <body class="bg-gray-50 text-gray-900 dark:bg-amoled-bg dark:text-zinc-100 min-h-screen flex flex-col items-center justify-center p-4">
     <div id="mainCard" class="w-full max-w-md bg-white dark:bg-amoled-card border border-gray-200 dark:border-amoled-border rounded-3xl shadow-2xl p-8 relative overflow-hidden z-10">
-        <div class="absolute -left-12 -top-12 w-40 h-40 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div>
-        <div class="absolute -right-12 -bottom-12 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="absolute -left-12 -top-12 w-40 h-40 bg-green-500/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="absolute -right-12 -bottom-12 w-40 h-40 bg-green-500/10 rounded-full blur-3xl pointer-events-none"></div>
             <div class="text-center mb-6 relative z-10">
-                <div class="inline-flex items-center justify-center p-3 bg-blue-950/60 border border-blue-500 text-blue-400 rounded-2xl mb-4 shadow-[0_0_15px_rgba(59,130,246,0.4)]">
-                    <svg class="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                <div class="inline-flex items-center justify-center p-3 bg-green-950/60 border border-green-500 text-green-400 rounded-2xl mb-4 shadow-[0_0_15px_rgba(59,130,246,0.4)]">
+                    <svg class="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                 </div>
-            <h2 class="text-2xl font-black text-gray-900 dark:text-white mb-2">SR Panel Deployer</h2>
+            <h2 class="text-2xl font-black text-gray-900 dark:text-white mb-2">SR Root Panel Deployer</h2>
             <p class="text-sm font-medium text-gray-500 dark:text-zinc-400">نصب خودکار پنل SR پنل روی کلودفلر</p>
 			<p class="text-sm font-medium text-gray-500 dark:text-zinc-400">🔥  روزانه 10 الی 100 گیگ کانفیگ رایگان  🔥</p>
         </div>
@@ -394,29 +394,29 @@ function getHtmlContent() {
         در کلودفلر لاگین کنید و سپس روی دکمه 
         <span class="font-bold text-orange-500">دریافت توکن</span> 
 		کلیک کنید و پس از ورود به سایت در انتهای صفحه روی دکمه آبی رنگ 
-        <span class="font-bold text-blue-500">Continue to summary</span> 
+        <span class="font-bold text-green-500">Continue to summary</span> 
         کلیک کنید و توکن بسازید و آن را در کادر زیر وارد کنید.
     </p>
 </div>   
             <div class="relative">
-                <input type="password" id="apiToken" placeholder="توکن خود را وارد کنید" autocomplete="off" spellcheck="false" class="w-full pl-12 pr-4 py-3.5 bg-gray-50 dark:bg-amoled-input border border-gray-300 dark:border-amoled-border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono text-right text-gray-900 dark:text-zinc-100 transition token-input" dir="auto">
+                <input type="password" id="apiToken" placeholder="توکن خود را وارد کنید" autocomplete="off" spellcheck="false" class="w-full pl-12 pr-4 py-3.5 bg-gray-50 dark:bg-amoled-input border border-gray-300 dark:border-amoled-border rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 text-sm font-mono text-right text-gray-900 dark:text-zinc-100 transition token-input" dir="auto">
                 <button type="button" onclick="toggleToken()" class="absolute inset-y-0 left-0 flex items-center pl-4 text-gray-400 hover:text-gray-600 dark:hover:text-zinc-300 transition">
                     <svg id="eyeIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
                 </button>
             </div>
-            <button id="deployBtn" onclick="startDeploy()" class="w-full py-3.5 border border-emerald-700 text-emerald-500 bg-emerald-900/20 hover:bg-emerald-900/40 font-black rounded-xl text-lg transition duration-300 shadow-sm">
+            <button id="deployBtn" onclick="startDeploy()" class="w-full py-3.5 border border-green-700 text-green-500 bg-green-900/20 hover:bg-green-900/40 font-black rounded-xl text-lg transition duration-300 shadow-sm">
                 ساخت پنل
             </button>
-            <button type="button" id="openUpdateModalBtn" onclick="toggleUpdateModal(true)" class="w-full py-3.5 border border-blue-700 text-blue-500 bg-blue-900/20 hover:bg-blue-900/40 font-black rounded-xl text-lg transition duration-300 shadow-sm mt-3">
+            <button type="button" id="openUpdateModalBtn" onclick="toggleUpdateModal(true)" class="w-full py-3.5 border border-green-700 text-green-500 bg-green-900/20 hover:bg-green-900/40 font-black rounded-xl text-lg transition duration-300 shadow-sm mt-3">
                 مدیریت و آپدیت پنل‌ها
             </button>
             <div id="status-container" class="hidden mt-4 bg-gray-50 dark:bg-zinc-900/50 rounded-xl p-4 border border-gray-200 dark:border-zinc-800/80">
                 <div class="flex justify-between items-center mb-2.5">
                     <span id="status-text" class="text-xs font-bold text-gray-600 dark:text-zinc-300">شروع فرآیند...</span>
-                    <span id="status-pct" class="text-xs font-black text-emerald-600 dark:text-emerald-500">۰٪</span>
+                    <span id="status-pct" class="text-xs font-black text-green-600 dark:text-green-500">۰٪</span>
                 </div>
                 <div class="w-full bg-gray-200 dark:bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-                    <div id="progressBar" class="bg-emerald-500 h-1.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+                    <div id="progressBar" class="bg-green-500 h-1.5 rounded-full transition-all duration-300" style="width: 0%"></div>
                 </div>
             </div>
             <div id="error-box" class="hidden mt-4 p-4 bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-900/30 rounded-xl text-sm text-red-600 dark:text-red-400 text-center font-medium"></div>
@@ -430,7 +430,7 @@ function getHtmlContent() {
             </svg>
             گیت‌هاب
         </a>
-        <a href="https://t.me/SR_Panel_IR_BOT" target="_blank" class="flex items-center gap-2 px-4 py-2 border border-sky-700 text-sky-500 bg-sky-900/20 hover:bg-sky-900/40 rounded-full shadow-sm hover:shadow-md transition text-sm font-bold group">
+        <a href="https://t.me/SR_Panel_IR_BOT" target="_blank" class="flex items-center gap-2 px-4 py-2 border border-green-700 text-green-500 bg-green-900/20 hover:bg-green-900/40 rounded-full shadow-sm hover:shadow-md transition text-sm font-bold group">
             <svg class="w-5 h-5 group-hover:scale-110 transition" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.94-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.37.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .24z"/>
             </svg>
@@ -444,11 +444,11 @@ function getHtmlContent() {
             </svg>
             ساخت رایگان پنل (غیر فعال)
         </a>
-        <a href="https://donatonion.ir-netlify.workers.dev" target="_blank" class="flex items-center gap-2 px-4 py-2 border border-red-700 text-red-500 bg-red-900/20 hover:bg-red-900/40 rounded-full shadow-sm hover:shadow-md transition text-sm font-bold group">
+        <a href="#" class="flex items-center gap-2 px-4 py-2 border border-gray-700 text-gray-500 bg-gray-900/20 rounded-full shadow-sm transition text-sm font-bold group">
             <svg class="w-5 h-5 group-hover:scale-110 transition" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3 9.24 3 10.91 3.81 12 5.08 13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
             </svg>
-            دونیت
+            بزودی
         </a>
     </div>
 </div>
@@ -463,7 +463,7 @@ function getHtmlContent() {
                 لغو
             </button>
             <button id="custom-confirm-ok" 
-                    class="flex-1 py-3 border border-emerald-700 text-emerald-500 bg-emerald-900/20 hover:bg-emerald-900/40 font-bold rounded-xl text-sm transition duration-200 shadow-sm">
+                    class="flex-1 py-3 border border-green-700 text-green-500 bg-green-900/20 hover:bg-green-900/40 font-bold rounded-xl text-sm transition duration-200 shadow-sm">
                 تایید
             </button>
         </div>
@@ -475,7 +475,7 @@ function showToast(message, type = 'success') {
     const toast = document.createElement('div');
     const colors = type === 'error' 
         ? 'bg-red-50 dark:bg-red-900/40 border-red-200 dark:border-red-800 text-red-600 dark:text-red-400' 
-        : 'bg-emerald-50 dark:bg-emerald-900/40 border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400';
+        : 'bg-green-50 dark:bg-green-900/40 border-green-200 dark:border-green-800 text-green-600 dark:text-green-400';
     toast.className = 'px-4 py-3 border rounded-xl shadow-lg font-bold text-sm transform transition-all duration-300 -translate-y-full opacity-0 ' + colors;
     toast.innerText = message;
     container.appendChild(toast);
@@ -587,7 +587,7 @@ async function checkExistingPanels() {
                     panelDiv.id = 'panel-item-' + panel.name;
                     panelDiv.innerHTML = '<div class="flex flex-col">' +
                         '<span class="font-bold text-gray-900 dark:text-zinc-100 break-all">' + panel.name + '</span>' +
-                        '<span id="version-text-' + panel.name + '" class="text-[11px] text-blue-500 font-medium mt-1 animate-pulse" dir="rtl">در حال بررسی...</span>' +
+                        '<span id="version-text-' + panel.name + '" class="text-[11px] text-green-500 font-medium mt-1 animate-pulse" dir="rtl">در حال بررسی...</span>' +
                     '</div>' + 
                     '<div id="btn-container-' + panel.name + '" class="w-full">' +
                         '<div class="w-16 h-6 bg-gray-200 dark:bg-zinc-700 rounded-lg animate-pulse"></div>' +
@@ -633,19 +633,19 @@ async function fetchPanelVersion(token, scriptName, latestVersion, devSub) {
 			let buttonsHtml = '<div class="space-y-1.5 pt-1">';
 			buttonsHtml += '<div class="flex gap-2">';
 			if (isLatest) {
-				buttonsHtml += '<button disabled class="flex-1 px-4 py-1.5 border border-emerald-700 text-emerald-500 bg-emerald-900/20 font-bold rounded-xl text-[11px] cursor-not-allowed shadow-sm">آپدیت شده ✓</button>';
+				buttonsHtml += '<button disabled class="flex-1 px-4 py-1.5 border border-green-700 text-green-500 bg-green-900/20 font-bold rounded-xl text-[11px] cursor-not-allowed shadow-sm">آپدیت شده ✓</button>';
 			} else {
-				buttonsHtml += '<button data-name="' + scriptName + '" onclick="updateSRPanel(this.dataset.name)" class="flex-1 px-4 py-1.5 border border-purple-700 text-purple-500 bg-purple-900/20 hover:bg-purple-900/40 font-bold rounded-xl text-[11px] transition shadow-sm">آپدیت پنل</button>';
+				buttonsHtml += '<button data-name="' + scriptName + '" onclick="updateSRPanel(this.dataset.name)" class="flex-1 px-4 py-1.5 border border-green-700 text-green-500 bg-green-900/20 hover:bg-green-900/40 font-bold rounded-xl text-[11px] transition shadow-sm">آپدیت پنل</button>';
 			}
 			if (devSub) {
-				buttonsHtml += '<a href="' + panelUrl + '" target="_blank" class="flex-1 px-4 py-1.5 border border-blue-700 text-blue-500 bg-blue-900/20 hover:bg-blue-900/40 font-bold rounded-xl text-[11px] transition shadow-sm flex items-center justify-center">ورود به پنل</a>';
+				buttonsHtml += '<a href="' + panelUrl + '" target="_blank" class="flex-1 px-4 py-1.5 border border-green-700 text-green-500 bg-green-900/20 hover:bg-green-900/40 font-bold rounded-xl text-[11px] transition shadow-sm flex items-center justify-center">ورود به پنل</a>';
 			} else {
 				buttonsHtml += '<button disabled class="flex-1 px-4 py-1.5 border border-gray-700 text-gray-500 bg-gray-900/20 font-bold rounded-xl text-[11px] cursor-not-allowed shadow-sm">ورود به پنل</button>';
 			}
 			buttonsHtml += '</div>';
 			buttonsHtml += '<div class="flex gap-2">';
 			buttonsHtml += '<button data-name="' + scriptName + '" onclick="resetPanelPassword(this.dataset.name)" class="flex-1 px-5 py-1.5 border border-yellow-700 text-yellow-500 bg-yellow-900/20 hover:bg-yellow-900/40 font-bold rounded-xl text-[11px] transition shadow-sm whitespace-nowrap min-w-[110px]">بازیابی رمز</button>';
-			buttonsHtml += '<button data-name="' + scriptName + '" onclick="reloadSRPanel(this.dataset.name)" class="flex-1 px-5 py-1.5 border border-cyan-700 text-cyan-500 bg-cyan-900/20 hover:bg-cyan-900/40 font-bold rounded-xl text-[11px] transition shadow-sm whitespace-nowrap min-w-[110px]">ری استارت</button>';
+			buttonsHtml += '<button data-name="' + scriptName + '" onclick="reloadSRPanel(this.dataset.name)" class="flex-1 px-5 py-1.5 border border-green-700 text-green-500 bg-green-900/20 hover:bg-green-900/40 font-bold rounded-xl text-[11px] transition shadow-sm whitespace-nowrap min-w-[110px]">ری استارت</button>';
 			buttonsHtml += '</div>';
 			buttonsHtml += '<div class="flex gap-2">';
 			buttonsHtml += '<button data-name="' + scriptName + '" onclick="deleteSRPanel(this.dataset.name)" class="flex-1 px-5 py-1.5 border border-red-700 text-red-500 bg-red-900/20 hover:bg-red-900/40 font-bold rounded-xl text-[11px] transition shadow-sm whitespace-nowrap min-w-[110px]">حذف پنل</button>';
@@ -801,25 +801,25 @@ async function reloadSRPanel(scriptName) {
                     statusContainer.classList.add('hidden');
                     const successText = document.createElement('div');
                     successText.id = 'successTxt';
-                    successText.className = 'text-center mt-6 font-bold text-sm text-emerald-600 dark:text-emerald-400 mb-3';
+                    successText.className = 'text-center mt-6 font-bold text-sm text-green-600 dark:text-green-400 mb-3';
                     successText.innerText = '✅ پنل ساخته شد لطفا 5 دقیقه صبر کنید و سپس وارد شوید';
                     document.getElementById('mainCard').appendChild(successText);
                     const linkBox = document.createElement('div');
-                    linkBox.className = 'flex flex-col items-center justify-center p-3 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-500/50 rounded-xl mb-3';
+                    linkBox.className = 'flex flex-col items-center justify-center p-3 bg-green-50 dark:bg-green-900/20 border border-green-500/50 rounded-xl mb-3';
                     const linkDisplay = document.createElement('span');
-                    linkDisplay.className = 'text-sm font-mono text-emerald-700 dark:text-emerald-400 mb-2 text-center break-all';
+                    linkDisplay.className = 'text-sm font-mono text-green-700 dark:text-green-400 mb-2 text-center break-all';
                     linkDisplay.innerText = result.url;
                     linkDisplay.dir = 'ltr';
                     const copyBtn = document.createElement('button');
-                    copyBtn.className = 'px-6 py-1.5 border border-emerald-700 text-emerald-500 bg-emerald-900/20 hover:bg-emerald-900/40 font-bold rounded-lg text-sm transition duration-300 shadow-sm';
+                    copyBtn.className = 'px-6 py-1.5 border border-green-700 text-green-500 bg-green-900/20 hover:bg-green-900/40 font-bold rounded-lg text-sm transition duration-300 shadow-sm';
                     copyBtn.innerText = 'کپی لینک پنل';
                     copyBtn.onclick = () => {
                         navigator.clipboard.writeText(result.url);
                         copyBtn.innerText = 'کپی شد!';
-                        copyBtn.classList.replace('bg-emerald-900/20', 'bg-emerald-900/40');
+                        copyBtn.classList.replace('bg-green-900/20', 'bg-green-900/40');
                         setTimeout(() => {
                             copyBtn.innerText = 'کپی لینک پنل';
-                            copyBtn.classList.replace('bg-emerald-900/40', 'bg-emerald-900/20');
+                            copyBtn.classList.replace('bg-green-900/40', 'bg-green-900/20');
                         }, 2000);
                     };
                     linkBox.appendChild(linkDisplay);
@@ -828,7 +828,7 @@ async function reloadSRPanel(scriptName) {
                     const successLink = document.createElement('a');
                     successLink.href = result.url;
                     successLink.target = '_blank';
-                    successLink.className = 'block w-full py-3.5 border border-blue-700 text-blue-500 bg-blue-900/20 hover:bg-blue-900/40 text-center font-bold rounded-xl transition duration-300 shadow-sm';
+                    successLink.className = 'block w-full py-3.5 border border-green-700 text-green-500 bg-green-900/20 hover:bg-green-900/40 text-center font-bold rounded-xl transition duration-300 shadow-sm';
                     successLink.id = 'successBtn';
                     successLink.innerText = 'ورود به پنل';
                     document.getElementById('mainCard').appendChild(successLink);
@@ -891,12 +891,12 @@ async function reloadSRPanel(scriptName) {
         در کلودفلر لاگین کنید و سپس روی دکمه 
         <span class="font-bold text-orange-500">دریافت توکن</span> 
 		کلیک کنید و پس از ورود به سایت در انتهای صفحه روی دکمه آبی رنگ 
-        <span class="font-bold text-blue-500">Continue to summary</span> 
+        <span class="font-bold text-green-500">Continue to summary</span> 
         کلیک کنید و توکن بسازید و آن را در کادر زیر وارد کنید.
     </p>
 </div>         
-            <input type="password" id="updateApiToken" placeholder="توکن خود را وارد کنید" autocomplete="off" spellcheck="false" class="w-full px-4 py-3 bg-gray-50 dark:bg-amoled-input border border-gray-300 dark:border-amoled-border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono text-right text-gray-900 dark:text-zinc-100 transition" dir="auto">
-            <button id="checkPanelsBtn" onclick="checkExistingPanels()" class="w-full py-3 border border-indigo-700 text-indigo-500 bg-indigo-900/20 hover:bg-indigo-900/40 font-bold rounded-xl text-md transition duration-300 shadow-sm">
+            <input type="password" id="updateApiToken" placeholder="توکن خود را وارد کنید" autocomplete="off" spellcheck="false" class="w-full px-4 py-3 bg-gray-50 dark:bg-amoled-input border border-gray-300 dark:border-amoled-border rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 text-sm font-mono text-right text-gray-900 dark:text-zinc-100 transition" dir="auto">
+            <button id="checkPanelsBtn" onclick="checkExistingPanels()" class="w-full py-3 border border-green-700 text-green-500 bg-green-900/20 hover:bg-green-900/40 font-bold rounded-xl text-md transition duration-300 shadow-sm">
                 بررسی پنل‌های موجود
             </button>
         </div>
