@@ -324,7 +324,6 @@ export default {
 			ctx.waitUntil(checkAutoResets(env));
 			ctx.waitUntil(checkAutoRotates(env));
 		}
-		const url = new URL(request.url);
 		if (Router.isWebSocketUpgrade(request)) {
 			return await Router.handleWebSocket(request, env, ctx);
 		}
